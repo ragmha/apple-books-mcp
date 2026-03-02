@@ -41,6 +41,7 @@ export class QueryBuilder<T extends z.ZodType> {
   private whereClauses: WhereClause[] = [];
   private orderClauses: OrderClause[] = [];
   private limitValue: number | null = null;
+  private offsetValue: number | null = null;
   private joinClauses: string[] = [];
 
   constructor(db: Database, schema: T, table: string) {
@@ -105,6 +106,11 @@ export class QueryBuilder<T extends z.ZodType> {
     return this;
   }
 
+  offset(n: number): this {
+    this.offsetValue = n;
+    return this;
+  }
+
   private buildQuery(): { sql: string; params: SQLQueryBindings[] } {
     const params: SQLQueryBindings[] = [];
     const selectCols = this.columns.join(", ");
@@ -136,9 +142,12 @@ export class QueryBuilder<T extends z.ZodType> {
       sql += " ORDER BY " + orders.join(", ");
     }
 
-    // Limit
+    // Limit & Offset
     if (this.limitValue != null) {
       sql += ` LIMIT ${this.limitValue}`;
+    }
+    if (this.offsetValue != null) {
+      sql += ` OFFSET ${this.offsetValue}`;
     }
 
     return { sql, params };

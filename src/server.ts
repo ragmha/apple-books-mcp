@@ -2,7 +2,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { listAllBooks, getBookById, searchBooks } from "./db/books.ts";
+import {
+  listAllBooks,
+  listBooks,
+  getBookById,
+  searchBooks,
+} from "./db/books.ts";
 import {
   listCollections,
   getCollectionById,
@@ -106,12 +111,24 @@ export function createServer(): McpServer {
   server.tool(
     "list_all_books",
     "List all books in Apple Books library",
-    {},
-    async () => {
-      const books = listAllBooks();
+    {
+      limit: z
+        .number()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("Max books to return (default 50, max 100)"),
+      offset: z
+        .number()
+        .min(0)
+        .optional()
+        .describe("Number of books to skip for pagination (default 0)"),
+    },
+    async ({ limit, offset }) => {
+      const result = listBooks(limit, offset);
       return {
         content: [
-          { type: "text" as const, text: JSON.stringify(books, null, 2) },
+          { type: "text" as const, text: JSON.stringify(result, null, 2) },
         ],
       };
     },

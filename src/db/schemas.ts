@@ -70,6 +70,15 @@ const AnnotationRowSchema = z.object({
 
 // --- Transformed presentation schemas ---
 
+export const BookSummarySchema = BookRowSchema.transform((row) => ({
+  id: row.Z_PK,
+  assetId: row.ZASSETID ?? "",
+  title: row.ZTITLE ?? "Untitled",
+  author: row.ZAUTHOR ?? "Unknown",
+  readingProgress: row.ZREADINGPROGRESS,
+  isFinished: row.ZISFINISHED === 1,
+}));
+
 export const BookSchema = BookRowSchema.transform((row) => ({
   id: row.Z_PK,
   assetId: row.ZASSETID ?? "",
@@ -121,5 +130,6 @@ export const AnnotationSchema = AnnotationRowSchema.transform((row) => ({
 
 // Infer types from schemas
 export type Book = z.output<typeof BookSchema>;
+export type BookSummary = z.output<typeof BookSummarySchema>;
 export type Collection = z.output<typeof CollectionSchema>;
 export type Annotation = z.output<typeof AnnotationSchema>;
