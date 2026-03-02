@@ -276,5 +276,10 @@ export async function serve(): Promise<void> {
     process.exit(0);
   });
 
+  process.on("SIGTERM", () => {
+    closeAll();
+    process.exit(0);
+  });
+
   await server.connect(transport);
 }

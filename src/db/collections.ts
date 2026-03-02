@@ -85,19 +85,24 @@ async function restartAppleBooks(): Promise<void> {
 }
 
 function getNextPrimaryKey(db: ReturnType<typeof getWritableLibraryDb>, entityNum: number): number {
+  // Atomic increment to avoid race conditions
+  db.run("UPDATE Z_PRIMARYKEY SET Z_MAX = Z_MAX + 1 WHERE Z_ENT = ?", [entityNum]);
   const row = db
     .query<{ Z_MAX: number }, [number]>("SELECT Z_MAX FROM Z_PRIMARYKEY WHERE Z_ENT = ?")
     .get(entityNum);
-  const nextPk = (row?.Z_MAX ?? 0) + 1;
-  db.run("UPDATE Z_PRIMARYKEY SET Z_MAX = ? WHERE Z_ENT = ?", [nextPk, entityNum]);
-  return nextPk;
+  return row?.Z_MAX ?? 1;
 }
 
 export async function addBookToCollection(
   bookId: string,
   collectionId: string
 ): Promise<{ success: boolean; message: string }> {
-  const backupPath = backupDatabase();
+  let backupPath: string;
+  try {
+    backupPath = backupDatabase();
+  } catch (error) {
+    return { success: false, message: `Backup failed: ${error}` };
+  }
 
   try {
     const db = getWritableLibraryDb();
@@ -187,7 +192,12 @@ export async function removeBookFromCollection(
   bookId: string,
   collectionId: string
 ): Promise<{ success: boolean; message: string }> {
-  const backupPath = backupDatabase();
+  let backupPath: string;
+  try {
+    backupPath = backupDatabase();
+  } catch (error) {
+    return { success: false, message: `Backup failed: ${error}` };
+  }
 
   try {
     const db = getWritableLibraryDb();
@@ -245,7 +255,12 @@ export async function removeBookFromCollection(
 export async function createCollection(
   name: string
 ): Promise<{ success: boolean; message: string; collectionId?: string }> {
-  const backupPath = backupDatabase();
+  let backupPath: string;
+  try {
+    backupPath = backupDatabase();
+  } catch (error) {
+    return { success: false, message: `Backup failed: ${error}` };
+  }
 
   try {
     const db = getWritableLibraryDb();
@@ -279,7 +294,12 @@ export async function createCollection(
 export async function deleteCollection(
   collectionId: string
 ): Promise<{ success: boolean; message: string }> {
-  const backupPath = backupDatabase();
+  let backupPath: string;
+  try {
+    backupPath = backupDatabase();
+  } catch (error) {
+    return { success: false, message: `Backup failed: ${error}` };
+  }
 
   try {
     const db = getWritableLibraryDb();

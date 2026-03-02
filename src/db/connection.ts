@@ -25,12 +25,18 @@ function findSqliteFile(dir: string, prefix: string): string {
 }
 
 let libraryDb: Database | null = null;
+let libraryDbReadonly: boolean | null = null;
 let annotationDb: Database | null = null;
 
 export function getLibraryDb(readonly = true): Database {
-  if (libraryDb) return libraryDb;
+  if (libraryDb && libraryDbReadonly === readonly) return libraryDb;
+  if (libraryDb) {
+    libraryDb.close();
+    libraryDb = null;
+  }
   const dbPath = findSqliteFile(BKLIBRARY_DIR, "BKLibrary");
   libraryDb = new Database(dbPath, { readonly });
+  libraryDbReadonly = readonly;
   libraryDb.exec("PRAGMA journal_mode=WAL");
   return libraryDb;
 }
@@ -45,20 +51,14 @@ export function getAnnotationDb(): Database {
 
 /** Reopen library DB with write access for mutation operations */
 export function getWritableLibraryDb(): Database {
-  if (libraryDb) {
-    libraryDb.close();
-    libraryDb = null;
-  }
-  const dbPath = findSqliteFile(BKLIBRARY_DIR, "BKLibrary");
-  libraryDb = new Database(dbPath, { readonly: false });
-  libraryDb.exec("PRAGMA journal_mode=WAL");
-  return libraryDb;
+  return getLibraryDb(false);
 }
 
 export function closeAll(): void {
   if (libraryDb) {
     libraryDb.close();
     libraryDb = null;
+    libraryDbReadonly = null;
   }
   if (annotationDb) {
     annotationDb.close();
