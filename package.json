@@ -1,0 +1,23 @@
+{
+  "name": "apple-books-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Apple Books with read and write support",
+  "module": "src/index.ts",
+  "type": "module",
+  "bin": {
+    "apple-books-mcp": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run --watch src/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1"
+  }
+}
