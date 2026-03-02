@@ -1,49 +1,49 @@
 import { getLibraryDb } from "./connection.ts";
-import type { BookRow } from "../types.ts";
-import { bookFromRow, type Book } from "../types.ts";
+import { createDb } from "./query.ts";
+import { BookSchema, type Book } from "./schemas.ts";
+import { Tables } from "./constants.ts";
 
 export function listAllBooks(): Book[] {
-  const db = getLibraryDb();
-  const rows = db
-    .query<BookRow, []>(
-      `SELECT * FROM ZBKLIBRARYASSET
-       WHERE ZCONTENTTYPE IS NOT NULL
-       ORDER BY ZSORTTITLE ASC`
-    )
-    .all();
-  return rows.map(bookFromRow);
+  const db = createDb(getLibraryDb());
+  return db
+    .selectFrom(Tables.Books, BookSchema)
+    .selectAll()
+    .whereNotNull("ZCONTENTTYPE")
+    .orderBy("ZSORTTITLE")
+    .execute();
 }
 
 export function getBookById(bookId: string): Book | null {
-  const db = getLibraryDb();
-  // Try by ZASSETID first, then by Z_PK
-  let row = db
-    .query<BookRow, [string]>(
-      `SELECT * FROM ZBKLIBRARYASSET WHERE ZASSETID = ?`
-    )
-    .get(bookId);
-  if (!row) {
+  const db = createDb(getLibraryDb());
+
+  // Try by ZASSETID first
+  let book = db
+    .selectFrom(Tables.Books, BookSchema)
+    .selectAll()
+    .where("ZASSETID", "=", bookId)
+    .get();
+
+  if (!book) {
     const numId = parseInt(bookId, 10);
     if (!isNaN(numId)) {
-      row = db
-        .query<BookRow, [number]>(
-          `SELECT * FROM ZBKLIBRARYASSET WHERE Z_PK = ?`
-        )
-        .get(numId);
+      book = db
+        .selectFrom(Tables.Books, BookSchema)
+        .selectAll()
+        .where("Z_PK", "=", numId)
+        .get();
     }
   }
-  return row ? bookFromRow(row) : null;
+  return book;
 }
 
 export function searchBooks(query: string): Book[] {
-  const db = getLibraryDb();
-  const pattern = `%${query}%`;
-  const rows = db
-    .query<BookRow, [string, string, string]>(
-      `SELECT * FROM ZBKLIBRARYASSET
-       WHERE ZTITLE LIKE ? OR ZAUTHOR LIKE ? OR ZGENRE LIKE ?
-       ORDER BY ZSORTTITLE ASC`
-    )
-    .all(pattern, pattern, pattern);
-  return rows.map(bookFromRow);
+  const db = createDb(getLibraryDb());
+  return db
+    .selectFrom(Tables.Books, BookSchema)
+    .selectAll()
+    .whereLike("ZTITLE", query)
+    .orWhereLike("ZAUTHOR", query)
+    .orWhereLike("ZGENRE", query)
+    .orderBy("ZSORTTITLE")
+    .execute();
 }

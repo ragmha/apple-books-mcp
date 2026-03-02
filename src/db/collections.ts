@@ -1,51 +1,68 @@
-import { getLibraryDb, getWritableLibraryDb, getLibraryDbPath } from "./connection.ts";
-import type { CollectionRow, CollectionMemberRow, BookRow } from "../types.ts";
-import { collectionFromRow, bookFromRow, type Collection, type Book } from "../types.ts";
+import {
+  getLibraryDb,
+  getWritableLibraryDb,
+  getLibraryDbPath,
+} from "./connection.ts";
+import { createDb } from "./query.ts";
+import {
+  BookSchema,
+  CollectionSchema,
+  type Collection,
+  type Book,
+} from "./schemas.ts";
+import { Tables, EntityTypes } from "./constants.ts";
 import { copyFileSync } from "node:fs";
+import { z } from "zod";
 import { $ } from "bun";
 
 export function listCollections(): Collection[] {
-  const db = getLibraryDb();
-  const rows = db
-    .query<CollectionRow, []>(
-      `SELECT * FROM ZBKCOLLECTION
-       WHERE (ZDELETEDFLAG = 0 OR ZDELETEDFLAG IS NULL)
-         AND ZTITLE != 'Sync Placeholder'
-       ORDER BY ZSORTKEY ASC`
-    )
-    .all();
-  return rows.map(collectionFromRow);
+  const db = createDb(getLibraryDb());
+  return db
+    .selectFrom(Tables.Collections, CollectionSchema)
+    .selectAll()
+    .where("ZDELETEDFLAG", "=", 0)
+    .orWhere("ZDELETEDFLAG", "IS", null)
+    .where("ZTITLE", "!=", "Sync Placeholder")
+    .orderBy("ZSORTKEY")
+    .execute();
 }
 
 export function getCollectionById(collectionId: string): Collection | null {
-  const db = getLibraryDb();
-  let row = db
-    .query<CollectionRow, [string]>(
-      `SELECT * FROM ZBKCOLLECTION WHERE ZCOLLECTIONID = ?`
-    )
-    .get(collectionId);
-  if (!row) {
+  const db = createDb(getLibraryDb());
+
+  let collection = db
+    .selectFrom(Tables.Collections, CollectionSchema)
+    .selectAll()
+    .where("ZCOLLECTIONID", "=", collectionId)
+    .get();
+
+  if (!collection) {
     const numId = parseInt(collectionId, 10);
     if (!isNaN(numId)) {
-      row = db
-        .query<CollectionRow, [number]>(
-          `SELECT * FROM ZBKCOLLECTION WHERE Z_PK = ?`
-        )
-        .get(numId);
+      collection = db
+        .selectFrom(Tables.Collections, CollectionSchema)
+        .selectAll()
+        .where("Z_PK", "=", numId)
+        .get();
     }
   }
-  return row ? collectionFromRow(row) : null;
+  return collection;
 }
 
+const PkRowSchema = z.object({ Z_PK: z.number() });
+
 export function getCollectionBooks(collectionId: string): Book[] {
-  const db = getLibraryDb();
+  const rawDb = getLibraryDb();
+  const db = createDb(rawDb);
+
   // Resolve collection Z_PK
   let collectionPk: number | null = null;
   const byId = db
-    .query<{ Z_PK: number }, [string]>(
-      `SELECT Z_PK FROM ZBKCOLLECTION WHERE ZCOLLECTIONID = ?`
-    )
-    .get(collectionId);
+    .selectFrom(Tables.Collections, PkRowSchema)
+    .select("Z_PK")
+    .where("ZCOLLECTIONID", "=", collectionId)
+    .get();
+
   if (byId) {
     collectionPk = byId.Z_PK;
   } else {
@@ -54,15 +71,16 @@ export function getCollectionBooks(collectionId: string): Book[] {
   }
   if (collectionPk == null) return [];
 
-  const rows = db
-    .query<BookRow, [number]>(
-      `SELECT a.* FROM ZBKLIBRARYASSET a
-       JOIN ZBKCOLLECTIONMEMBER cm ON cm.ZASSET = a.Z_PK
+  // Use raw query for JOIN (query builder doesn't transform joined results well)
+  const rows = rawDb
+    .query(
+      `SELECT a.* FROM ${Tables.Books} a
+       JOIN ${Tables.CollectionMembers} cm ON cm.ZASSET = a.Z_PK
        WHERE cm.ZCOLLECTION = ?
-       ORDER BY a.ZSORTTITLE ASC`
+       ORDER BY a.ZSORTTITLE ASC`,
     )
     .all(collectionPk);
-  return rows.map(bookFromRow);
+  return rows.map((row) => BookSchema.parse(row));
 }
 
 // --- Write operations ---
@@ -84,18 +102,26 @@ async function restartAppleBooks(): Promise<void> {
   }
 }
 
-function getNextPrimaryKey(db: ReturnType<typeof getWritableLibraryDb>, entityNum: number): number {
+function getNextPrimaryKey(
+  db: ReturnType<typeof getWritableLibraryDb>,
+  entityNum: number,
+): number {
   // Atomic increment to avoid race conditions
-  db.run("UPDATE Z_PRIMARYKEY SET Z_MAX = Z_MAX + 1 WHERE Z_ENT = ?", [entityNum]);
+  db.run(`UPDATE ${Tables.PrimaryKey} SET Z_MAX = Z_MAX + 1 WHERE Z_ENT = ?`, [
+    entityNum,
+  ]);
   const row = db
-    .query<{ Z_MAX: number }, [number]>("SELECT Z_MAX FROM Z_PRIMARYKEY WHERE Z_ENT = ?")
+    .query<
+      { Z_MAX: number },
+      [number]
+    >(`SELECT Z_MAX FROM ${Tables.PrimaryKey} WHERE Z_ENT = ?`)
     .get(entityNum);
   return row?.Z_MAX ?? 1;
 }
 
 export async function addBookToCollection(
   bookId: string,
-  collectionId: string
+  collectionId: string,
 ): Promise<{ success: boolean; message: string }> {
   let backupPath: string;
   try {
@@ -111,9 +137,10 @@ export async function addBookToCollection(
     let bookPk: number | null = null;
     let assetId: string | null = null;
     const bookByAsset = db
-      .query<{ Z_PK: number; ZASSETID: string }, [string]>(
-        "SELECT Z_PK, ZASSETID FROM ZBKLIBRARYASSET WHERE ZASSETID = ?"
-      )
+      .query<
+        { Z_PK: number; ZASSETID: string },
+        [string]
+      >(`SELECT Z_PK, ZASSETID FROM ${Tables.Books} WHERE ZASSETID = ?`)
       .get(bookId);
     if (bookByAsset) {
       bookPk = bookByAsset.Z_PK;
@@ -122,9 +149,10 @@ export async function addBookToCollection(
       const numId = parseInt(bookId, 10);
       if (!isNaN(numId)) {
         const bookByPk = db
-          .query<{ Z_PK: number; ZASSETID: string }, [number]>(
-            "SELECT Z_PK, ZASSETID FROM ZBKLIBRARYASSET WHERE Z_PK = ?"
-          )
+          .query<
+            { Z_PK: number; ZASSETID: string },
+            [number]
+          >(`SELECT Z_PK, ZASSETID FROM ${Tables.Books} WHERE Z_PK = ?`)
           .get(numId);
         if (bookByPk) {
           bookPk = bookByPk.Z_PK;
@@ -139,9 +167,10 @@ export async function addBookToCollection(
     // Resolve collection
     let collectionPk: number | null = null;
     const collByUuid = db
-      .query<{ Z_PK: number }, [string]>(
-        "SELECT Z_PK FROM ZBKCOLLECTION WHERE ZCOLLECTIONID = ?"
-      )
+      .query<
+        { Z_PK: number },
+        [string]
+      >(`SELECT Z_PK FROM ${Tables.Collections} WHERE ZCOLLECTIONID = ?`)
       .get(collectionId);
     if (collByUuid) {
       collectionPk = collByUuid.Z_PK;
@@ -150,14 +179,18 @@ export async function addBookToCollection(
       if (!isNaN(numId)) collectionPk = numId;
     }
     if (collectionPk == null) {
-      return { success: false, message: `Collection not found: ${collectionId}` };
+      return {
+        success: false,
+        message: `Collection not found: ${collectionId}`,
+      };
     }
 
     // Check if already a member
     const existing = db
-      .query<{ Z_PK: number }, [number, number]>(
-        "SELECT Z_PK FROM ZBKCOLLECTIONMEMBER WHERE ZCOLLECTION = ? AND ZASSET = ?"
-      )
+      .query<
+        { Z_PK: number },
+        [number, number]
+      >(`SELECT Z_PK FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ? AND ZASSET = ?`)
       .get(collectionPk, bookPk);
     if (existing) {
       return { success: true, message: "Book is already in this collection" };
@@ -165,32 +198,39 @@ export async function addBookToCollection(
 
     // Get next sort key
     const maxSort = db
-      .query<{ maxKey: number | null }, [number]>(
-        "SELECT MAX(ZSORTKEY) as maxKey FROM ZBKCOLLECTIONMEMBER WHERE ZCOLLECTION = ?"
-      )
+      .query<
+        { maxKey: number | null },
+        [number]
+      >(`SELECT MAX(ZSORTKEY) as maxKey FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ?`)
       .get(collectionPk);
     const sortKey = (maxSort?.maxKey ?? 0) + 1;
 
-    // Entity 3 = BKCollectionMember
-    const newPk = getNextPrimaryKey(db, 3);
-    const now = (Date.now() / 1000) - (Date.UTC(2001, 0, 1) / 1000);
+    const newPk = getNextPrimaryKey(db, EntityTypes.CollectionMember);
+    const now = Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
 
     db.run(
-      `INSERT INTO ZBKCOLLECTIONMEMBER (Z_PK, Z_ENT, Z_OPT, ZSORTKEY, ZASSET, ZCOLLECTION, ZLOCALMODDATE, ZASSETID)
-       VALUES (?, 3, 1, ?, ?, ?, ?, ?)`,
-      [newPk, sortKey, bookPk, collectionPk, now, assetId]
+      `INSERT INTO ${Tables.CollectionMembers} (Z_PK, Z_ENT, Z_OPT, ZSORTKEY, ZASSET, ZCOLLECTION, ZLOCALMODDATE, ZASSETID)
+       VALUES (?, ${EntityTypes.CollectionMember}, 1, ?, ?, ?, ?, ?)`,
+      [newPk, sortKey, bookPk, collectionPk, now, assetId],
     );
 
     await restartAppleBooks();
-    return { success: true, message: `Added book to collection. Backup at: ${backupPath}` };
+    return {
+      success: true,
+      message: "Added book to collection. Database backup created.",
+    };
   } catch (error) {
-    return { success: false, message: `Error: ${error}. Backup at: ${backupPath}` };
+    console.error("addBookToCollection error:", error, "Backup:", backupPath);
+    return {
+      success: false,
+      message: "Operation failed. Database backup created.",
+    };
   }
 }
 
 export async function removeBookFromCollection(
   bookId: string,
-  collectionId: string
+  collectionId: string,
 ): Promise<{ success: boolean; message: string }> {
   let backupPath: string;
   try {
@@ -205,9 +245,10 @@ export async function removeBookFromCollection(
     // Resolve book Z_PK
     let bookPk: number | null = null;
     const bookByAsset = db
-      .query<{ Z_PK: number }, [string]>(
-        "SELECT Z_PK FROM ZBKLIBRARYASSET WHERE ZASSETID = ?"
-      )
+      .query<
+        { Z_PK: number },
+        [string]
+      >(`SELECT Z_PK FROM ${Tables.Books} WHERE ZASSETID = ?`)
       .get(bookId);
     if (bookByAsset) {
       bookPk = bookByAsset.Z_PK;
@@ -222,9 +263,10 @@ export async function removeBookFromCollection(
     // Resolve collection Z_PK
     let collectionPk: number | null = null;
     const collByUuid = db
-      .query<{ Z_PK: number }, [string]>(
-        "SELECT Z_PK FROM ZBKCOLLECTION WHERE ZCOLLECTIONID = ?"
-      )
+      .query<
+        { Z_PK: number },
+        [string]
+      >(`SELECT Z_PK FROM ${Tables.Collections} WHERE ZCOLLECTIONID = ?`)
       .get(collectionId);
     if (collByUuid) {
       collectionPk = collByUuid.Z_PK;
@@ -233,12 +275,15 @@ export async function removeBookFromCollection(
       if (!isNaN(numId)) collectionPk = numId;
     }
     if (collectionPk == null) {
-      return { success: false, message: `Collection not found: ${collectionId}` };
+      return {
+        success: false,
+        message: `Collection not found: ${collectionId}`,
+      };
     }
 
     const result = db.run(
-      "DELETE FROM ZBKCOLLECTIONMEMBER WHERE ZCOLLECTION = ? AND ZASSET = ?",
-      [collectionPk, bookPk]
+      `DELETE FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ? AND ZASSET = ?`,
+      [collectionPk, bookPk],
     );
 
     if (result.changes === 0) {
@@ -246,14 +291,26 @@ export async function removeBookFromCollection(
     }
 
     await restartAppleBooks();
-    return { success: true, message: `Removed book from collection. Backup at: ${backupPath}` };
+    return {
+      success: true,
+      message: "Removed book from collection. Database backup created.",
+    };
   } catch (error) {
-    return { success: false, message: `Error: ${error}. Backup at: ${backupPath}` };
+    console.error(
+      "removeBookFromCollection error:",
+      error,
+      "Backup:",
+      backupPath,
+    );
+    return {
+      success: false,
+      message: "Operation failed. Database backup created.",
+    };
   }
 }
 
 export async function createCollection(
-  name: string
+  name: string,
 ): Promise<{ success: boolean; message: string; collectionId?: string }> {
   let backupPath: string;
   try {
@@ -268,31 +325,39 @@ export async function createCollection(
 
     // Get max sort key
     const maxSort = db
-      .query<{ maxKey: number | null }, []>(
-        "SELECT MAX(ZSORTKEY) as maxKey FROM ZBKCOLLECTION"
-      )
+      .query<
+        { maxKey: number | null },
+        []
+      >(`SELECT MAX(ZSORTKEY) as maxKey FROM ${Tables.Collections}`)
       .get();
     const sortKey = (maxSort?.maxKey ?? 0) + 1;
 
-    // Entity 2 = BKCollection
-    const newPk = getNextPrimaryKey(db, 2);
-    const now = (Date.now() / 1000) - (Date.UTC(2001, 0, 1) / 1000);
+    const newPk = getNextPrimaryKey(db, EntityTypes.Collection);
+    const now = Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
 
     db.run(
-      `INSERT INTO ZBKCOLLECTION (Z_PK, Z_ENT, Z_OPT, ZDELETEDFLAG, ZHIDDEN, ZPLACEHOLDER, ZSORTKEY, ZSORTMODE, ZVIEWMODE, ZLASTMODIFICATION, ZLOCALMODDATE, ZCOLLECTIONID, ZDETAILS, ZTITLE)
-       VALUES (?, 2, 1, 0, 0, 0, ?, 0, 0, ?, ?, ?, NULL, ?)`,
-      [newPk, sortKey, now, now, collectionUuid, name]
+      `INSERT INTO ${Tables.Collections} (Z_PK, Z_ENT, Z_OPT, ZDELETEDFLAG, ZHIDDEN, ZPLACEHOLDER, ZSORTKEY, ZSORTMODE, ZVIEWMODE, ZLASTMODIFICATION, ZLOCALMODDATE, ZCOLLECTIONID, ZDETAILS, ZTITLE)
+       VALUES (?, ${EntityTypes.Collection}, 1, 0, 0, 0, ?, 0, 0, ?, ?, ?, NULL, ?)`,
+      [newPk, sortKey, now, now, collectionUuid, name],
     );
 
     await restartAppleBooks();
-    return { success: true, message: `Created collection "${name}". Backup at: ${backupPath}`, collectionId: collectionUuid };
+    return {
+      success: true,
+      message: `Created collection "${name}". Database backup created.`,
+      collectionId: collectionUuid,
+    };
   } catch (error) {
-    return { success: false, message: `Error: ${error}. Backup at: ${backupPath}` };
+    console.error("createCollection error:", error, "Backup:", backupPath);
+    return {
+      success: false,
+      message: "Operation failed. Database backup created.",
+    };
   }
 }
 
 export async function deleteCollection(
-  collectionId: string
+  collectionId: string,
 ): Promise<{ success: boolean; message: string }> {
   let backupPath: string;
   try {
@@ -303,12 +368,12 @@ export async function deleteCollection(
 
   try {
     const db = getWritableLibraryDb();
-    const now = (Date.now() / 1000) - (Date.UTC(2001, 0, 1) / 1000);
+    const now = Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
 
     // Soft delete: set ZDELETEDFLAG = 1
     const result = db.run(
-      "UPDATE ZBKCOLLECTION SET ZDELETEDFLAG = 1, ZLASTMODIFICATION = ?, ZLOCALMODDATE = ? WHERE ZCOLLECTIONID = ?",
-      [now, now, collectionId]
+      `UPDATE ${Tables.Collections} SET ZDELETEDFLAG = 1, ZLASTMODIFICATION = ?, ZLOCALMODDATE = ? WHERE ZCOLLECTIONID = ?`,
+      [now, now, collectionId],
     );
 
     if (result.changes === 0) {
@@ -316,20 +381,33 @@ export async function deleteCollection(
       const numId = parseInt(collectionId, 10);
       if (!isNaN(numId)) {
         const result2 = db.run(
-          "UPDATE ZBKCOLLECTION SET ZDELETEDFLAG = 1, ZLASTMODIFICATION = ?, ZLOCALMODDATE = ? WHERE Z_PK = ?",
-          [now, now, numId]
+          `UPDATE ${Tables.Collections} SET ZDELETEDFLAG = 1, ZLASTMODIFICATION = ?, ZLOCALMODDATE = ? WHERE Z_PK = ?`,
+          [now, now, numId],
         );
         if (result2.changes === 0) {
-          return { success: false, message: `Collection not found: ${collectionId}` };
+          return {
+            success: false,
+            message: `Collection not found: ${collectionId}`,
+          };
         }
       } else {
-        return { success: false, message: `Collection not found: ${collectionId}` };
+        return {
+          success: false,
+          message: `Collection not found: ${collectionId}`,
+        };
       }
     }
 
     await restartAppleBooks();
-    return { success: true, message: `Deleted collection. Backup at: ${backupPath}` };
+    return {
+      success: true,
+      message: "Deleted collection. Database backup created.",
+    };
   } catch (error) {
-    return { success: false, message: `Error: ${error}. Backup at: ${backupPath}` };
+    console.error("deleteCollection error:", error, "Backup:", backupPath);
+    return {
+      success: false,
+      message: "Operation failed. Database backup created.",
+    };
   }
 }
