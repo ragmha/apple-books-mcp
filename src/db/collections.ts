@@ -11,7 +11,8 @@ import {
   type Book,
 } from "./schemas.ts";
 import { Tables, EntityTypes } from "./constants.ts";
-import { copyFileSync } from "node:fs";
+import { copyFileSync, readdirSync, unlinkSync } from "node:fs";
+import { dirname, basename, join } from "node:path";
 import { z } from "zod";
 import { $ } from "bun";
 
@@ -20,8 +21,7 @@ export function listCollections(): Collection[] {
   return db
     .selectFrom(Tables.Collections, CollectionSchema)
     .selectAll()
-    .where("ZDELETEDFLAG", "=", 0)
-    .orWhere("ZDELETEDFLAG", "IS", null)
+    .whereRaw("COALESCE(ZDELETEDFLAG, 0) = 0")
     .where("ZTITLE", "!=", "Sync Placeholder")
     .orderBy("ZSORTKEY")
     .execute();
@@ -85,10 +85,33 @@ export function getCollectionBooks(collectionId: string): Book[] {
 
 // --- Write operations ---
 
+const MAX_BACKUPS = 5;
+
 function backupDatabase(): string {
   const dbPath = getLibraryDbPath();
   const backupPath = `${dbPath}.backup-${Date.now()}`;
+
+  // Checkpoint WAL to ensure backup includes all committed data
+  const db = getWritableLibraryDb();
+  db.run("PRAGMA wal_checkpoint(TRUNCATE)");
+
   copyFileSync(dbPath, backupPath);
+
+  // Rotate old backups, keep only the most recent MAX_BACKUPS
+  const dir = dirname(dbPath);
+  const dbName = basename(dbPath);
+  const backups = readdirSync(dir)
+    .filter((f) => f.startsWith(`${dbName}.backup-`))
+    .sort()
+    .reverse();
+  for (const old of backups.slice(MAX_BACKUPS)) {
+    try {
+      unlinkSync(join(dir, old));
+    } catch {
+      // Best-effort cleanup
+    }
+  }
+
   return backupPath;
 }
 
@@ -97,8 +120,8 @@ async function restartAppleBooks(): Promise<void> {
     await $`osascript -e 'tell application "Books" to quit'`.quiet();
     await Bun.sleep(1000);
     await $`open -a Books`.quiet();
-  } catch {
-    // Books may not be running, which is fine
+  } catch (error) {
+    console.error("restartAppleBooks:", error);
   }
 }
 
@@ -106,7 +129,6 @@ function getNextPrimaryKey(
   db: ReturnType<typeof getWritableLibraryDb>,
   entityNum: number,
 ): number {
-  // Atomic increment to avoid race conditions
   db.run(`UPDATE ${Tables.PrimaryKey} SET Z_MAX = Z_MAX + 1 WHERE Z_ENT = ?`, [
     entityNum,
   ]);
@@ -132,87 +154,98 @@ export async function addBookToCollection(
 
   try {
     const db = getWritableLibraryDb();
+    db.run("BEGIN IMMEDIATE");
 
-    // Resolve book
-    let bookPk: number | null = null;
-    let assetId: string | null = null;
-    const bookByAsset = db
-      .query<
-        { Z_PK: number; ZASSETID: string },
-        [string]
-      >(`SELECT Z_PK, ZASSETID FROM ${Tables.Books} WHERE ZASSETID = ?`)
-      .get(bookId);
-    if (bookByAsset) {
-      bookPk = bookByAsset.Z_PK;
-      assetId = bookByAsset.ZASSETID;
-    } else {
-      const numId = parseInt(bookId, 10);
-      if (!isNaN(numId)) {
-        const bookByPk = db
-          .query<
-            { Z_PK: number; ZASSETID: string },
-            [number]
-          >(`SELECT Z_PK, ZASSETID FROM ${Tables.Books} WHERE Z_PK = ?`)
-          .get(numId);
-        if (bookByPk) {
-          bookPk = bookByPk.Z_PK;
-          assetId = bookByPk.ZASSETID;
+    try {
+      // Resolve book
+      let bookPk: number | null = null;
+      let assetId: string | null = null;
+      const bookByAsset = db
+        .query<
+          { Z_PK: number; ZASSETID: string },
+          [string]
+        >(`SELECT Z_PK, ZASSETID FROM ${Tables.Books} WHERE ZASSETID = ?`)
+        .get(bookId);
+      if (bookByAsset) {
+        bookPk = bookByAsset.Z_PK;
+        assetId = bookByAsset.ZASSETID;
+      } else {
+        const numId = parseInt(bookId, 10);
+        if (!isNaN(numId)) {
+          const bookByPk = db
+            .query<
+              { Z_PK: number; ZASSETID: string },
+              [number]
+            >(`SELECT Z_PK, ZASSETID FROM ${Tables.Books} WHERE Z_PK = ?`)
+            .get(numId);
+          if (bookByPk) {
+            bookPk = bookByPk.Z_PK;
+            assetId = bookByPk.ZASSETID;
+          }
         }
       }
-    }
-    if (bookPk == null || assetId == null) {
-      return { success: false, message: `Book not found: ${bookId}` };
-    }
+      if (bookPk == null || assetId == null) {
+        db.run("ROLLBACK");
+        return { success: false, message: `Book not found: ${bookId}` };
+      }
 
-    // Resolve collection
-    let collectionPk: number | null = null;
-    const collByUuid = db
-      .query<
-        { Z_PK: number },
-        [string]
-      >(`SELECT Z_PK FROM ${Tables.Collections} WHERE ZCOLLECTIONID = ?`)
-      .get(collectionId);
-    if (collByUuid) {
-      collectionPk = collByUuid.Z_PK;
-    } else {
-      const numId = parseInt(collectionId, 10);
-      if (!isNaN(numId)) collectionPk = numId;
+      // Resolve collection
+      let collectionPk: number | null = null;
+      const collByUuid = db
+        .query<
+          { Z_PK: number },
+          [string]
+        >(`SELECT Z_PK FROM ${Tables.Collections} WHERE ZCOLLECTIONID = ?`)
+        .get(collectionId);
+      if (collByUuid) {
+        collectionPk = collByUuid.Z_PK;
+      } else {
+        const numId = parseInt(collectionId, 10);
+        if (!isNaN(numId)) collectionPk = numId;
+      }
+      if (collectionPk == null) {
+        db.run("ROLLBACK");
+        return {
+          success: false,
+          message: `Collection not found: ${collectionId}`,
+        };
+      }
+
+      // Check if already a member
+      const existing = db
+        .query<
+          { Z_PK: number },
+          [number, number]
+        >(`SELECT Z_PK FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ? AND ZASSET = ?`)
+        .get(collectionPk, bookPk);
+      if (existing) {
+        db.run("ROLLBACK");
+        return { success: true, message: "Book is already in this collection" };
+      }
+
+      // Get next sort key
+      const maxSort = db
+        .query<
+          { maxKey: number | null },
+          [number]
+        >(`SELECT MAX(ZSORTKEY) as maxKey FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ?`)
+        .get(collectionPk);
+      const sortKey = (maxSort?.maxKey ?? 0) + 1;
+
+      const newPk = getNextPrimaryKey(db, EntityTypes.CollectionMember);
+      const now = Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
+
+      db.run(
+        `INSERT INTO ${Tables.CollectionMembers} (Z_PK, Z_ENT, Z_OPT, ZSORTKEY, ZASSET, ZCOLLECTION, ZLOCALMODDATE, ZASSETID)
+         VALUES (?, ${EntityTypes.CollectionMember}, 1, ?, ?, ?, ?, ?)`,
+        [newPk, sortKey, bookPk, collectionPk, now, assetId],
+      );
+
+      db.run("COMMIT");
+    } catch (error) {
+      db.run("ROLLBACK");
+      throw error;
     }
-    if (collectionPk == null) {
-      return {
-        success: false,
-        message: `Collection not found: ${collectionId}`,
-      };
-    }
-
-    // Check if already a member
-    const existing = db
-      .query<
-        { Z_PK: number },
-        [number, number]
-      >(`SELECT Z_PK FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ? AND ZASSET = ?`)
-      .get(collectionPk, bookPk);
-    if (existing) {
-      return { success: true, message: "Book is already in this collection" };
-    }
-
-    // Get next sort key
-    const maxSort = db
-      .query<
-        { maxKey: number | null },
-        [number]
-      >(`SELECT MAX(ZSORTKEY) as maxKey FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ?`)
-      .get(collectionPk);
-    const sortKey = (maxSort?.maxKey ?? 0) + 1;
-
-    const newPk = getNextPrimaryKey(db, EntityTypes.CollectionMember);
-    const now = Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
-
-    db.run(
-      `INSERT INTO ${Tables.CollectionMembers} (Z_PK, Z_ENT, Z_OPT, ZSORTKEY, ZASSET, ZCOLLECTION, ZLOCALMODDATE, ZASSETID)
-       VALUES (?, ${EntityTypes.CollectionMember}, 1, ?, ?, ?, ?, ?)`,
-      [newPk, sortKey, bookPk, collectionPk, now, assetId],
-    );
 
     await restartAppleBooks();
     return {
@@ -241,53 +274,64 @@ export async function removeBookFromCollection(
 
   try {
     const db = getWritableLibraryDb();
+    db.run("BEGIN IMMEDIATE");
 
-    // Resolve book Z_PK
-    let bookPk: number | null = null;
-    const bookByAsset = db
-      .query<
-        { Z_PK: number },
-        [string]
-      >(`SELECT Z_PK FROM ${Tables.Books} WHERE ZASSETID = ?`)
-      .get(bookId);
-    if (bookByAsset) {
-      bookPk = bookByAsset.Z_PK;
-    } else {
-      const numId = parseInt(bookId, 10);
-      if (!isNaN(numId)) bookPk = numId;
-    }
-    if (bookPk == null) {
-      return { success: false, message: `Book not found: ${bookId}` };
-    }
+    try {
+      // Resolve book Z_PK
+      let bookPk: number | null = null;
+      const bookByAsset = db
+        .query<
+          { Z_PK: number },
+          [string]
+        >(`SELECT Z_PK FROM ${Tables.Books} WHERE ZASSETID = ?`)
+        .get(bookId);
+      if (bookByAsset) {
+        bookPk = bookByAsset.Z_PK;
+      } else {
+        const numId = parseInt(bookId, 10);
+        if (!isNaN(numId)) bookPk = numId;
+      }
+      if (bookPk == null) {
+        db.run("ROLLBACK");
+        return { success: false, message: `Book not found: ${bookId}` };
+      }
 
-    // Resolve collection Z_PK
-    let collectionPk: number | null = null;
-    const collByUuid = db
-      .query<
-        { Z_PK: number },
-        [string]
-      >(`SELECT Z_PK FROM ${Tables.Collections} WHERE ZCOLLECTIONID = ?`)
-      .get(collectionId);
-    if (collByUuid) {
-      collectionPk = collByUuid.Z_PK;
-    } else {
-      const numId = parseInt(collectionId, 10);
-      if (!isNaN(numId)) collectionPk = numId;
-    }
-    if (collectionPk == null) {
-      return {
-        success: false,
-        message: `Collection not found: ${collectionId}`,
-      };
-    }
+      // Resolve collection Z_PK
+      let collectionPk: number | null = null;
+      const collByUuid = db
+        .query<
+          { Z_PK: number },
+          [string]
+        >(`SELECT Z_PK FROM ${Tables.Collections} WHERE ZCOLLECTIONID = ?`)
+        .get(collectionId);
+      if (collByUuid) {
+        collectionPk = collByUuid.Z_PK;
+      } else {
+        const numId = parseInt(collectionId, 10);
+        if (!isNaN(numId)) collectionPk = numId;
+      }
+      if (collectionPk == null) {
+        db.run("ROLLBACK");
+        return {
+          success: false,
+          message: `Collection not found: ${collectionId}`,
+        };
+      }
 
-    const result = db.run(
-      `DELETE FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ? AND ZASSET = ?`,
-      [collectionPk, bookPk],
-    );
+      const result = db.run(
+        `DELETE FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ? AND ZASSET = ?`,
+        [collectionPk, bookPk],
+      );
 
-    if (result.changes === 0) {
-      return { success: false, message: "Book was not in this collection" };
+      if (result.changes === 0) {
+        db.run("ROLLBACK");
+        return { success: false, message: "Book was not in this collection" };
+      }
+
+      db.run("COMMIT");
+    } catch (error) {
+      db.run("ROLLBACK");
+      throw error;
     }
 
     await restartAppleBooks();
@@ -322,24 +366,32 @@ export async function createCollection(
   try {
     const db = getWritableLibraryDb();
     const collectionUuid = crypto.randomUUID().toUpperCase();
+    db.run("BEGIN IMMEDIATE");
 
-    // Get max sort key
-    const maxSort = db
-      .query<
-        { maxKey: number | null },
-        []
-      >(`SELECT MAX(ZSORTKEY) as maxKey FROM ${Tables.Collections}`)
-      .get();
-    const sortKey = (maxSort?.maxKey ?? 0) + 1;
+    try {
+      // Get max sort key
+      const maxSort = db
+        .query<
+          { maxKey: number | null },
+          []
+        >(`SELECT MAX(ZSORTKEY) as maxKey FROM ${Tables.Collections}`)
+        .get();
+      const sortKey = (maxSort?.maxKey ?? 0) + 1;
 
-    const newPk = getNextPrimaryKey(db, EntityTypes.Collection);
-    const now = Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
+      const newPk = getNextPrimaryKey(db, EntityTypes.Collection);
+      const now = Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
 
-    db.run(
-      `INSERT INTO ${Tables.Collections} (Z_PK, Z_ENT, Z_OPT, ZDELETEDFLAG, ZHIDDEN, ZPLACEHOLDER, ZSORTKEY, ZSORTMODE, ZVIEWMODE, ZLASTMODIFICATION, ZLOCALMODDATE, ZCOLLECTIONID, ZDETAILS, ZTITLE)
-       VALUES (?, ${EntityTypes.Collection}, 1, 0, 0, 0, ?, 0, 0, ?, ?, ?, NULL, ?)`,
-      [newPk, sortKey, now, now, collectionUuid, name],
-    );
+      db.run(
+        `INSERT INTO ${Tables.Collections} (Z_PK, Z_ENT, Z_OPT, ZDELETEDFLAG, ZHIDDEN, ZPLACEHOLDER, ZSORTKEY, ZSORTMODE, ZVIEWMODE, ZLASTMODIFICATION, ZLOCALMODDATE, ZCOLLECTIONID, ZDETAILS, ZTITLE)
+         VALUES (?, ${EntityTypes.Collection}, 1, 0, 0, 0, ?, 0, 0, ?, ?, ?, NULL, ?)`,
+        [newPk, sortKey, now, now, collectionUuid, name],
+      );
+
+      db.run("COMMIT");
+    } catch (error) {
+      db.run("ROLLBACK");
+      throw error;
+    }
 
     await restartAppleBooks();
     return {
@@ -369,33 +421,43 @@ export async function deleteCollection(
   try {
     const db = getWritableLibraryDb();
     const now = Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
+    db.run("BEGIN IMMEDIATE");
 
-    // Soft delete: set ZDELETEDFLAG = 1
-    const result = db.run(
-      `UPDATE ${Tables.Collections} SET ZDELETEDFLAG = 1, ZLASTMODIFICATION = ?, ZLOCALMODDATE = ? WHERE ZCOLLECTIONID = ?`,
-      [now, now, collectionId],
-    );
+    try {
+      // Soft delete: set ZDELETEDFLAG = 1
+      const result = db.run(
+        `UPDATE ${Tables.Collections} SET ZDELETEDFLAG = 1, ZLASTMODIFICATION = ?, ZLOCALMODDATE = ? WHERE ZCOLLECTIONID = ?`,
+        [now, now, collectionId],
+      );
 
-    if (result.changes === 0) {
-      // Try by Z_PK
-      const numId = parseInt(collectionId, 10);
-      if (!isNaN(numId)) {
-        const result2 = db.run(
-          `UPDATE ${Tables.Collections} SET ZDELETEDFLAG = 1, ZLASTMODIFICATION = ?, ZLOCALMODDATE = ? WHERE Z_PK = ?`,
-          [now, now, numId],
-        );
-        if (result2.changes === 0) {
+      if (result.changes === 0) {
+        // Try by Z_PK
+        const numId = parseInt(collectionId, 10);
+        if (!isNaN(numId)) {
+          const result2 = db.run(
+            `UPDATE ${Tables.Collections} SET ZDELETEDFLAG = 1, ZLASTMODIFICATION = ?, ZLOCALMODDATE = ? WHERE Z_PK = ?`,
+            [now, now, numId],
+          );
+          if (result2.changes === 0) {
+            db.run("ROLLBACK");
+            return {
+              success: false,
+              message: `Collection not found: ${collectionId}`,
+            };
+          }
+        } else {
+          db.run("ROLLBACK");
           return {
             success: false,
             message: `Collection not found: ${collectionId}`,
           };
         }
-      } else {
-        return {
-          success: false,
-          message: `Collection not found: ${collectionId}`,
-        };
       }
+
+      db.run("COMMIT");
+    } catch (error) {
+      db.run("ROLLBACK");
+      throw error;
     }
 
     await restartAppleBooks();

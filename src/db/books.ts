@@ -86,5 +86,6 @@ export function searchBooks(query: string): Book[] {
     .orWhereLike("ZAUTHOR", query)
     .orWhereLike("ZGENRE", query)
     .orderBy("ZSORTTITLE")
+    .limit(MAX_LIMIT)
     .execute();
 }

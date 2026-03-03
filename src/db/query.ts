@@ -25,6 +25,12 @@ interface WhereClause {
   connector?: "AND" | "OR";
 }
 
+interface RawWhereClause {
+  raw: string;
+  params: SQLQueryBindings[];
+  connector: "AND" | "OR";
+}
+
 interface OrderClause {
   column: string;
   direction: OrderDirection;
@@ -38,8 +44,9 @@ export class QueryBuilder<T extends z.ZodType> {
   private schema: T;
   private tableName: string;
   private columns: string[] = ["*"];
-  private whereClauses: WhereClause[] = [];
+  private whereClauses: (WhereClause | RawWhereClause)[] = [];
   private orderClauses: OrderClause[] = [];
+  private stmtCache = new Map<string, ReturnType<Database["query"]>>();
   private limitValue: number | null = null;
   private offsetValue: number | null = null;
   private joinClauses: string[] = [];
@@ -79,6 +86,12 @@ export class QueryBuilder<T extends z.ZodType> {
   orWhereLike(column: string, pattern: string): this {
     const escaped = `%${escapeLikePattern(pattern)}%`;
     return this.orWhere(column, "LIKE", escaped);
+  }
+
+  /** Inject a raw SQL condition with AND connector */
+  whereRaw(sql: string, params: SQLQueryBindings[] = []): this {
+    this.whereClauses.push({ raw: sql, params, connector: "AND" });
+    return this;
   }
 
   /** WHERE column IS NULL */
@@ -124,12 +137,20 @@ export class QueryBuilder<T extends z.ZodType> {
     // Where
     if (this.whereClauses.length > 0) {
       const conditions = this.whereClauses.map((w, i) => {
+        if ("raw" in w) {
+          params.push(...w.params);
+          const condition = w.raw;
+          return i === 0 ? condition : `${w.connector} ${condition}`;
+        }
         let condition: string;
         if (w.value === null) {
           condition = `${w.column} ${w.operator} NULL`;
         } else {
           params.push(w.value as SQLQueryBindings);
-          condition = `${w.column} ${w.operator} ?`;
+          condition =
+            w.operator === "LIKE"
+              ? `${w.column} ${w.operator} ? ESCAPE '\\'`
+              : `${w.column} ${w.operator} ?`;
         }
         return i === 0 ? condition : `${w.connector} ${condition}`;
       });
@@ -153,10 +174,19 @@ export class QueryBuilder<T extends z.ZodType> {
     return { sql, params };
   }
 
+  private getOrPrepare(sql: string): ReturnType<Database["query"]> {
+    let stmt = this.stmtCache.get(sql);
+    if (!stmt) {
+      stmt = this.db.query(sql);
+      this.stmtCache.set(sql, stmt);
+    }
+    return stmt;
+  }
+
   /** Execute and return all rows, validated against schema */
   all(): z.infer<T>[] {
     const { sql, params } = this.buildQuery();
-    const stmt = this.db.query(sql);
+    const stmt = this.getOrPrepare(sql);
     const rows = stmt.all(...params);
     return rows.map((row) => this.schema.parse(row));
   }
@@ -164,7 +194,7 @@ export class QueryBuilder<T extends z.ZodType> {
   /** Execute and return first row, validated against schema */
   get(): z.infer<T> | null {
     const { sql, params } = this.buildQuery();
-    const stmt = this.db.query(sql);
+    const stmt = this.getOrPrepare(sql);
     const row = stmt.get(...params);
     return row ? this.schema.parse(row) : null;
   }

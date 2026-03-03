@@ -7,9 +7,9 @@ function findSqliteFile(dir: string, prefix: string): string {
   if (!existsSync(dir)) {
     throw new Error(`Apple Books directory not found: ${dir}`);
   }
-  const files = readdirSync(dir).filter(
-    (f) => f.startsWith(prefix) && f.endsWith(".sqlite"),
-  );
+  const files = readdirSync(dir)
+    .filter((f) => f.startsWith(prefix) && f.endsWith(".sqlite"))
+    .sort((a, b) => a.length - b.length || a.localeCompare(b));
   if (files.length === 0) {
     throw new Error(
       `No SQLite database found in ${dir} with prefix "${prefix}"`,
@@ -31,7 +31,9 @@ export function getLibraryDb(readonly = true): Database {
   const dbPath = findSqliteFile(Paths.libraryDir, DbPrefixes.library);
   libraryDb = new Database(dbPath, { readonly });
   libraryDbReadonly = readonly;
-  libraryDb.run("PRAGMA journal_mode=WAL");
+  if (!readonly) {
+    libraryDb.run("PRAGMA journal_mode=WAL");
+  }
   return libraryDb;
 }
 
@@ -39,7 +41,6 @@ export function getAnnotationDb(): Database {
   if (annotationDb) return annotationDb;
   const dbPath = findSqliteFile(Paths.annotationDir, DbPrefixes.annotation);
   annotationDb = new Database(dbPath, { readonly: true });
-  annotationDb.run("PRAGMA journal_mode=WAL");
   return annotationDb;
 }
 

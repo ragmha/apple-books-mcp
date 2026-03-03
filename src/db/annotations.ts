@@ -1,5 +1,5 @@
 import { getAnnotationDb } from "./connection.ts";
-import { createDb } from "./query.ts";
+import { createDb, escapeLikePattern } from "./query.ts";
 import { AnnotationSchema, type Annotation } from "./schemas.ts";
 import { Tables } from "./constants.ts";
 
@@ -8,8 +8,7 @@ export function listAllAnnotations(): Annotation[] {
   return db
     .selectFrom(Tables.Annotations, AnnotationSchema)
     .selectAll()
-    .where("ZANNOTATIONDELETED", "=", 0)
-    .orWhere("ZANNOTATIONDELETED", "IS", null)
+    .whereRaw("COALESCE(ZANNOTATIONDELETED, 0) = 0")
     .orderBy("ZANNOTATIONMODIFICATIONDATE", "DESC")
     .execute();
 }
@@ -20,8 +19,7 @@ export function getAnnotationsByBookId(assetId: string): Annotation[] {
     .selectFrom(Tables.Annotations, AnnotationSchema)
     .selectAll()
     .where("ZANNOTATIONASSETID", "=", assetId)
-    .where("ZANNOTATIONDELETED", "=", 0)
-    .orWhere("ZANNOTATIONDELETED", "IS", null)
+    .whereRaw("COALESCE(ZANNOTATIONDELETED, 0) = 0")
     .orderBy("ZANNOTATIONCREATIONDATE")
     .execute();
 }
@@ -66,8 +64,7 @@ export function getHighlightsByColor(color: string): Annotation[] {
     .selectFrom(Tables.Annotations, AnnotationSchema)
     .selectAll()
     .where("ZANNOTATIONSTYLE", "=", styleNum)
-    .where("ZANNOTATIONDELETED", "=", 0)
-    .orWhere("ZANNOTATIONDELETED", "IS", null)
+    .whereRaw("COALESCE(ZANNOTATIONDELETED, 0) = 0")
     .orderBy("ZANNOTATIONMODIFICATIONDATE", "DESC")
     .execute();
 }
@@ -78,8 +75,7 @@ export function searchHighlightedText(text: string): Annotation[] {
     .selectFrom(Tables.Annotations, AnnotationSchema)
     .selectAll()
     .whereLike("ZANNOTATIONSELECTEDTEXT", text)
-    .where("ZANNOTATIONDELETED", "=", 0)
-    .orWhere("ZANNOTATIONDELETED", "IS", null)
+    .whereRaw("COALESCE(ZANNOTATIONDELETED, 0) = 0")
     .orderBy("ZANNOTATIONMODIFICATIONDATE", "DESC")
     .execute();
 }
@@ -90,22 +86,22 @@ export function searchNotes(note: string): Annotation[] {
     .selectFrom(Tables.Annotations, AnnotationSchema)
     .selectAll()
     .whereLike("ZANNOTATIONNOTE", note)
-    .where("ZANNOTATIONDELETED", "=", 0)
-    .orWhere("ZANNOTATIONDELETED", "IS", null)
+    .whereRaw("COALESCE(ZANNOTATIONDELETED, 0) = 0")
     .orderBy("ZANNOTATIONMODIFICATIONDATE", "DESC")
     .execute();
 }
 
+/** Note: Leading wildcard LIKE queries (%term%) cannot use indexes and cause full table scans */
 export function fullTextSearch(text: string): Annotation[] {
   const db = createDb(getAnnotationDb());
   return db
     .selectFrom(Tables.Annotations, AnnotationSchema)
     .selectAll()
-    .whereLike("ZANNOTATIONSELECTEDTEXT", text)
-    .orWhereLike("ZANNOTATIONNOTE", text)
-    .orWhereLike("ZANNOTATIONREPRESENTATIVETEXT", text)
-    .where("ZANNOTATIONDELETED", "=", 0)
-    .orWhere("ZANNOTATIONDELETED", "IS", null)
+    .whereRaw(
+      "(ZANNOTATIONSELECTEDTEXT LIKE ? ESCAPE '\\' OR ZANNOTATIONNOTE LIKE ? ESCAPE '\\' OR ZANNOTATIONREPRESENTATIVETEXT LIKE ? ESCAPE '\\')",
+      [`%${escapeLikePattern(text)}%`, `%${escapeLikePattern(text)}%`, `%${escapeLikePattern(text)}%`],
+    )
+    .whereRaw("COALESCE(ZANNOTATIONDELETED, 0) = 0")
     .orderBy("ZANNOTATIONMODIFICATIONDATE", "DESC")
     .execute();
 }
@@ -115,8 +111,7 @@ export function recentAnnotations(limit = 10): Annotation[] {
   return db
     .selectFrom(Tables.Annotations, AnnotationSchema)
     .selectAll()
-    .where("ZANNOTATIONDELETED", "=", 0)
-    .orWhere("ZANNOTATIONDELETED", "IS", null)
+    .whereRaw("COALESCE(ZANNOTATIONDELETED, 0) = 0")
     .orderBy("ZANNOTATIONMODIFICATIONDATE", "DESC")
     .limit(limit)
     .execute();

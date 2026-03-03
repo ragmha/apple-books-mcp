@@ -190,10 +190,13 @@ export function createServer(): McpServer {
     "Get all annotations for a particular book",
     { book_id: IdSchema.describe("Book asset ID") },
     async ({ book_id }) => {
-      // Resolve asset ID if given numeric PK
+      // Only resolve via getBookById if input looks like a numeric PK
       let assetId = book_id;
-      const book = getBookById(book_id);
-      if (book) assetId = book.assetId;
+      const numId = parseInt(book_id, 10);
+      if (!isNaN(numId) && String(numId) === book_id) {
+        const book = getBookById(book_id);
+        if (book) assetId = book.assetId;
+      }
 
       const annotations = getAnnotationsByBookId(assetId);
       return {
