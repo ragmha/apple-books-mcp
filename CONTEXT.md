@@ -67,14 +67,18 @@ sync failure.
                   │   (read fns)           │  │   createCollectionTx   │
                   │                        │  │   deleteCollectionTx   │
                   │ via createDb(...)      │  │   (pure descriptions)  │
-                  │ → Zod-validated rows   │  └────────────┬───────────┘
-                  └────────────┬───────────┘               │
+                  │ → Zod-validated rows   │  │ src/db/backups.ts      │
+                  └────────────┬───────────┘  │   listLibraryBackups   │
+                               │              │   restoreLibrary…      │
+                               │              └────────────┬───────────┘
                                │                           │ describes change
                                │              ┌────────────▼───────────┐
                                │              │ src/db/library-        │
                                │              │   mutation.ts          │
                                │              │   ┌──────────────────┐ │
                                │              │   │ mutate(fn, opts) │ │
+                               │              │   │ listBackups()    │ │
+                               │              │   │ restore(handle)  │ │
                                │              │   └──────────────────┘ │
                                │              │   • snapshot           │
                                │              │   • verifySnapshot     │
@@ -134,11 +138,12 @@ record call order so behaviour can be asserted end-to-end without touching
 ## Architecture (this codebase) — terms
 
 - **Library Mutation** — the deepened module that owns every write to the
-  Library. Single entry point `mutate(fn)`; behind the seam: snapshot the
-  Library, verify the snapshot, ensure Books.app is not running,
-  `BEGIN IMMEDIATE`, run the caller's described change, `COMMIT` or
-  `ROLLBACK`, relaunch Books.app, return a structured result. The only
-  place the safety ceremony lives.
+  Library. Three entry points: `mutate(fn)` for transactional changes,
+  `listBackups()` to enumerate previous snapshots, and `restore(handle)`
+  to roll the Library back to one. All three share the same safety
+  ceremony behind the seam: snapshot the Library, verify the snapshot,
+  ensure Books.app is not running, do the work, relaunch Books.app, return
+  a structured result. The only place the safety ceremony lives.
 - **Library Tx** — the handle the caller receives inside a `mutate` callback.
   Exposes Core Data row helpers (`insert`, `update`, `softDelete`) that bake
   in `Z_PK` / `Z_ENT` / `Z_OPT` / mtime discipline, plus `query` / `run`
@@ -149,9 +154,9 @@ record call order so behaviour can be asserted end-to-end without touching
   sanitised "Operation failed" with the backup path.
 - **Library Store** — the seam over the Library's filesystem and lifecycle:
   locate the `.sqlite` file, snapshot it (WAL checkpoint + copy + rotation),
-  verify a snapshot's integrity, hand out read-only and writable handles.
-  Production adapter: real `~/Library/Containers/...`. Test adapter:
-  in-memory SQLite + temp dir.
+  verify a snapshot's integrity, list snapshots, restore from one, hand out
+  read-only and writable handles. Production adapter: real
+  `~/Library/Containers/...`. Test adapter: in-memory SQLite + temp dir.
 - **Books App Control** — the seam over the macOS Books application:
   `isRunning`, `quit`, `launch`. Production adapter: `osascript` /
   `pgrep` / `open -a Books`. Test adapter: no-op.

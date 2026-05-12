@@ -150,6 +150,8 @@ All list/search tools accept `limit` (default 50, max 100) and `offset`.
 | `remove_book_from_collection` | |
 | `create_collection` | Returns the new `collectionId` (UUID) |
 | `delete_collection` | Soft delete (`ZDELETEDFLAG = 1`) |
+| `list_backups` | Enumerate previously-taken Library snapshots, newest first |
+| `restore_backup` | Roll the Library back to a chosen snapshot (with the same safety ceremony as a write) |
 
 ## Backups & restore
 
@@ -158,16 +160,22 @@ Every write produces a snapshot file alongside the Library, named
 `~/Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary/`. The
 five most recent backups are kept; older ones are pruned.
 
-If a write goes wrong and you need to restore:
+To roll back, ask your MCP client to run `list_backups` (returns
+`{handle, createdAt, sizeBytes}` newest-first), then call
+`restore_backup` with the chosen `handle`. The restore runs the same
+safety ceremony as a write: integrity-check the chosen backup → quit
+Books.app → take a **fresh pre-restore safety snapshot of the current
+Library** → swap the file → relaunch Books. The safety snapshot path is
+returned in the result so you can roll forward again if needed.
+
+If you'd rather restore by hand:
 
 1. **Quit Apple Books.**
-2. In the BKLibrary directory, find the most recent `.backup-*` file.
+2. In the BKLibrary directory, find the `.backup-*` file you want.
 3. Copy it over the live `BKLibrary-*.sqlite` file (preserve the live
    filename — the suffix matters).
 4. Delete the `.sqlite-wal` and `.sqlite-shm` siblings if they exist.
 5. Reopen Apple Books.
-
-A future release will expose this as a `restore_backup` tool.
 
 ## Troubleshooting
 

@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type {
+  BackupInfo,
   BooksAppPort,
   LibraryStore,
 } from "../../src/db/library-mutation.ts";
@@ -13,12 +14,20 @@ type Call = string;
  *
  * `verifySnapshot` returns the value of `verifyResult` (default true), so
  * tests that want to simulate a corrupt backup can flip it.
+ *
+ * `backups` is the list returned from `listBackups`. `restoreFromBackup`
+ * records the call and (unless `restoreError` is set) increments
+ * `restoresPerformed`.
  */
 export class FakeLibraryStore implements LibraryStore {
   verifyResult = true;
   /** When set, snapshot() throws this error instead of recording a snapshot. */
   snapshotError: Error | null = null;
+  /** When set, restoreFromBackup() throws this error instead of swapping. */
+  restoreError: Error | null = null;
   snapshotsTaken = 0;
+  restoresPerformed = 0;
+  backups: BackupInfo[] = [];
   readonly calls: Call[];
 
   constructor(
@@ -42,6 +51,16 @@ export class FakeLibraryStore implements LibraryStore {
   verifySnapshot(handle: string): boolean {
     this.calls.push(`verify:${handle}`);
     return this.verifyResult;
+  }
+
+  listBackups(): BackupInfo[] {
+    return this.backups;
+  }
+
+  restoreFromBackup(handle: string): void {
+    this.calls.push(`restoreFromBackup:${handle}`);
+    if (this.restoreError) throw this.restoreError;
+    this.restoresPerformed += 1;
   }
 }
 

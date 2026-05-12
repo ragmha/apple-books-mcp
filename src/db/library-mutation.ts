@@ -76,6 +76,29 @@ export interface LibraryStore {
 
   /** Verify a snapshot's integrity (production: PRAGMA integrity_check). */
   verifySnapshot(handle: string): boolean;
+
+  /** Enumerate the rotated backups this store has previously taken. */
+  listBackups(): BackupInfo[];
+
+  /**
+   * Restore the live Library from a previously-taken backup. Production
+   * overwrites the live `.sqlite` file with the backup's bytes. Caller must
+   * ensure Books.app is not running and that integrity has been verified.
+   */
+  restoreFromBackup(handle: string): void;
+}
+
+/** Metadata about one rotated backup of the Library. */
+export interface BackupInfo {
+  /**
+   * Opaque handle that can be passed back to `verifySnapshot` and
+   * `restoreFromBackup`. In production this is the absolute file path.
+   */
+  handle: string;
+  /** ISO-8601 timestamp parsed from the backup file name. */
+  createdAt: string;
+  /** File size in bytes. */
+  sizeBytes: number;
 }
 
 /** The seam over the macOS Books application. */
@@ -90,13 +113,113 @@ export interface LibraryMutation {
     fn: LibraryTxFn<T>,
     options?: MutationOptions,
   ): Promise<MutationResult<T>>;
+
+  /** Enumerate previously-taken backups, newest first. */
+  listBackups(): BackupInfo[];
+
+  /**
+   * Restore the live Library from a previously-taken backup, with the same
+   * safety ceremony as `mutate`: verify integrity → quit Books → take a
+   * pre-restore safety snapshot → swap the file → relaunch Books.
+   *
+   * Returns a structured `RestoreResult` rather than throwing — the same
+   * sanitisation rules as `mutate` apply, so raw error text never reaches
+   * the caller.
+   */
+  restore(handle: string): Promise<RestoreResult>;
 }
+
+/** Outcome of a `restore` call. */
+export type RestoreResult =
+  | {
+      success: true;
+      restoredFrom: string;
+      safetyBackupPath: string;
+      message: string;
+    }
+  | { success: false; message: string; safetyBackupPath?: string };
 
 export function createLibraryMutation(
   store: LibraryStore,
   booksApp: BooksAppPort,
 ): LibraryMutation {
   return {
+    listBackups() {
+      return store.listBackups();
+    },
+
+    async restore(handle) {
+      // 1. Verify the chosen backup BEFORE doing anything destructive.
+      //    A corrupt backup is unrecoverable, so abort early.
+      if (!store.verifySnapshot(handle)) {
+        return {
+          success: false,
+          message: `Backup ${handle} failed integrity check; aborted before any change.`,
+        };
+      }
+
+      // 2. Quit Books so the file copy is safe (Books holds the SQLite
+      //    file open in WAL mode otherwise).
+      try {
+        if (await booksApp.isRunning()) {
+          await booksApp.quit();
+        }
+      } catch (error) {
+        console.error("LibraryMutation.restore: quit failed:", error);
+        return {
+          success: false,
+          message: "Operation failed: could not quit Books.app.",
+        };
+      }
+
+      // 3. Snapshot the CURRENT state before overwriting it. If the user
+      //    chose the wrong backup, this safety snapshot is their escape hatch.
+      let safetyBackupPath: string;
+      try {
+        safetyBackupPath = store.snapshot();
+      } catch (error) {
+        console.error(
+          "LibraryMutation.restore: pre-restore safety snapshot failed:",
+          error,
+        );
+        return {
+          success: false,
+          message:
+            "Operation failed: could not take pre-restore safety snapshot of current Library.",
+        };
+      }
+
+      // 4. Overwrite the live Library with the chosen backup's bytes.
+      try {
+        store.restoreFromBackup(handle);
+      } catch (error) {
+        console.error("LibraryMutation.restore: file swap failed:", error);
+        return {
+          success: false,
+          message: `Operation failed during file swap. Pre-restore safety snapshot saved at ${safetyBackupPath}.`,
+          safetyBackupPath,
+        };
+      }
+
+      // 5. Relaunch Books. A launch failure here is non-fatal — the data
+      //    is restored on disk; the user can reopen Books manually.
+      try {
+        await booksApp.launch();
+      } catch (error) {
+        console.error(
+          "LibraryMutation.restore: launch failed after successful restore:",
+          error,
+        );
+      }
+
+      return {
+        success: true,
+        restoredFrom: handle,
+        safetyBackupPath,
+        message: `Restored Library from ${handle}. Pre-restore safety snapshot saved at ${safetyBackupPath}.`,
+      };
+    },
+
     async mutate(fn, options) {
       // Outer try/catch: any failure during setup (snapshot, verify, quit,
       // openWritable, BEGIN) must surface as a structured MutationResult,

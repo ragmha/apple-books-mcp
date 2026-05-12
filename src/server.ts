@@ -19,6 +19,10 @@ import {
   deleteCollection,
 } from "./db/collections.ts";
 import {
+  listLibraryBackups,
+  restoreLibraryFromBackup,
+} from "./db/backups.ts";
+import {
   listAllAnnotations,
   getAnnotationsByBookId,
   getAnnotationById,
@@ -299,6 +303,38 @@ export function createServer(): McpServer {
     { collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)") },
     ({ collection_id }: { collection_id: string }) =>
       deleteCollection(collection_id),
+  );
+
+  // --- Backup tools ---
+  //
+  // Every write takes an integrity-checked snapshot before mutating. These
+  // tools let users see those snapshots and roll the Library back to one.
+  // `restore_backup` runs the same safety ceremony as a write: integrity
+  // check the chosen backup, quit Books, take a *fresh* pre-restore safety
+  // snapshot, swap the file, relaunch Books.
+
+  mcpTool(
+    server,
+    "list_backups",
+    "List Apple Books Library backups previously taken before each write, newest first.",
+    {},
+    () => listLibraryBackups(),
+  );
+
+  mcpTool(
+    server,
+    "restore_backup",
+    "Restore the Apple Books Library from a previously-taken backup. Takes a fresh pre-restore safety snapshot first, then swaps the file and restarts Books.app.",
+    {
+      handle: z
+        .string()
+        .min(1)
+        .max(1024)
+        .describe(
+          "Backup handle (the `handle` field returned by list_backups; absolute path to the backup file).",
+        ),
+    },
+    ({ handle }: { handle: string }) => restoreLibraryFromBackup(handle),
   );
 
   return server;
