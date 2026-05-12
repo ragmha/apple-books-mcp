@@ -3,14 +3,52 @@ import { createDb, escapeLikePattern } from "./query.ts";
 import { AnnotationSchema, type Annotation } from "./schemas.ts";
 import { Tables } from "./constants.ts";
 
-export function listAllAnnotations(): Annotation[] {
-  const db = createDb(getAnnotationDb());
-  return db
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 100;
+
+function clampLimit(limit: number | undefined): number {
+  return Math.min(Math.max(limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+}
+
+export type AnnotationPage = {
+  annotations: Annotation[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export function listAllAnnotations(
+  limit?: number,
+  offset?: number,
+): AnnotationPage {
+  const annDb = getAnnotationDb();
+  const db = createDb(annDb);
+  const effectiveLimit = clampLimit(limit);
+  const effectiveOffset = Math.max(offset ?? 0, 0);
+
+  const total = annDb
+    .query<{ count: number }, []>(
+      `SELECT COUNT(*) as count FROM ${Tables.Annotations}
+       WHERE COALESCE(ZANNOTATIONDELETED, 0) = 0`,
+    )
+    .get()!.count;
+
+  const annotations = db
     .selectFrom(Tables.Annotations, AnnotationSchema)
     .selectAll()
     .whereRaw("COALESCE(ZANNOTATIONDELETED, 0) = 0")
     .orderBy("ZANNOTATIONMODIFICATIONDATE", "DESC")
+    .orderBy("Z_PK", "DESC")
+    .limit(effectiveLimit)
+    .offset(effectiveOffset)
     .execute();
+
+  return {
+    annotations,
+    total,
+    limit: effectiveLimit,
+    offset: effectiveOffset,
+  };
 }
 
 export function getAnnotationsByBookId(assetId: string): Annotation[] {
@@ -55,18 +93,50 @@ const colorToStyle: Record<string, number> = {
   purple: 5,
 };
 
-export function getHighlightsByColor(color: string): Annotation[] {
+export function getHighlightsByColor(
+  color: string,
+  limit?: number,
+  offset?: number,
+): AnnotationPage {
   const styleNum = colorToStyle[color.toLowerCase()];
-  if (styleNum == null) return [];
+  const effectiveLimit = clampLimit(limit);
+  const effectiveOffset = Math.max(offset ?? 0, 0);
+  if (styleNum == null) {
+    return {
+      annotations: [],
+      total: 0,
+      limit: effectiveLimit,
+      offset: effectiveOffset,
+    };
+  }
 
-  const db = createDb(getAnnotationDb());
-  return db
+  const annDb = getAnnotationDb();
+  const db = createDb(annDb);
+
+  const total = annDb
+    .query<{ count: number }, [number]>(
+      `SELECT COUNT(*) as count FROM ${Tables.Annotations}
+       WHERE ZANNOTATIONSTYLE = ? AND COALESCE(ZANNOTATIONDELETED, 0) = 0`,
+    )
+    .get(styleNum)!.count;
+
+  const annotations = db
     .selectFrom(Tables.Annotations, AnnotationSchema)
     .selectAll()
     .where("ZANNOTATIONSTYLE", "=", styleNum)
     .whereRaw("COALESCE(ZANNOTATIONDELETED, 0) = 0")
     .orderBy("ZANNOTATIONMODIFICATIONDATE", "DESC")
+    .orderBy("Z_PK", "DESC")
+    .limit(effectiveLimit)
+    .offset(effectiveOffset)
     .execute();
+
+  return {
+    annotations,
+    total,
+    limit: effectiveLimit,
+    offset: effectiveOffset,
+  };
 }
 
 export function searchHighlightedText(text: string): Annotation[] {

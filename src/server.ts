@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import {
@@ -27,9 +28,11 @@ import {
   fullTextSearch,
   recentAnnotations,
 } from "./db/annotations.ts";
-import { closeAll } from "./db/connection.ts";
+import { closeAll, getLibraryDb } from "./db/connection.ts";
+import { validateLibrarySchema } from "./db/schema-check.ts";
+import { mcpTool } from "./mcp-tool.ts";
 
-// Reusable Zod schemas with security constraints
+// Reusable Zod schemas with security constraints.
 export const IdSchema = z
   .string()
   .min(1)
@@ -45,333 +48,288 @@ export const HighlightColorSchema = z.enum([
   "purple",
 ]);
 
+// Pagination schema reused across list/search tools so the same params and
+// docs appear everywhere a tool returns potentially many rows.
+const Pagination = {
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Max items to return (default 50, max 100)"),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Items to skip for pagination (default 0)"),
+} as const;
+
+function notFound(what: string, id: string): McpError {
+  return new McpError(ErrorCode.InvalidParams, `${what} not found: ${id}`);
+}
+
 export function createServer(): McpServer {
-  const server = new McpServer({
-    name: "apple-books",
-    version: "0.1.0",
-  });
-
-  // --- Collection Tools (Read) ---
-
-  server.tool(
-    "list_collections",
-    "List all collections in Apple Books library",
-    {},
-    async () => {
-      const collections = listCollections();
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(collections, null, 2),
-          },
-        ],
-      };
-    },
+  const server = new McpServer(
+    { name: "apple-books", version: "0.1.0" },
+    { capabilities: { tools: {} } },
   );
 
-  server.tool(
-    "get_collection_books",
-    "Get all books in a particular collection",
-    { collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)") },
-    async ({ collection_id }) => {
-      const books = getCollectionBooks(collection_id);
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(books, null, 2),
-          },
-        ],
-      };
-    },
+  // --- Collection tools (read) ---
+
+  mcpTool(server, "list_collections", "List all collections in the Library.", {}, () =>
+    listCollections(),
   );
 
-  server.tool(
-    "describe_collection",
-    "Get details of a particular collection",
+  mcpTool(
+    server,
+    "list_collection_books",
+    "Get all books in a particular collection.",
     { collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)") },
-    async ({ collection_id }) => {
+    ({ collection_id }: { collection_id: string }) =>
+      getCollectionBooks(collection_id),
+  );
+
+  mcpTool(
+    server,
+    "get_collection",
+    "Get details of a particular collection.",
+    { collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)") },
+    ({ collection_id }: { collection_id: string }) => {
       const collection = getCollectionById(collection_id);
-      if (!collection) {
-        return {
-          content: [{ type: "text" as const, text: "Collection not found" }],
-        };
-      }
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(collection, null, 2) },
-        ],
-      };
+      if (!collection) throw notFound("Collection", collection_id);
+      return collection;
     },
   );
 
-  // --- Book Tools (Read) ---
+  // --- Book tools (read) ---
 
-  server.tool(
+  mcpTool(
+    server,
+    "list_books",
+    "List books in the Library, paginated.",
+    Pagination,
+    ({ limit, offset }: { limit?: number; offset?: number }) =>
+      listBooks(limit, offset),
+  );
+
+  mcpTool(
+    server,
     "list_all_books",
-    "List all books in Apple Books library",
-    {
-      limit: z
-        .number()
-        .min(1)
-        .max(100)
-        .optional()
-        .describe("Max books to return (default 50, max 100)"),
-      offset: z
-        .number()
-        .min(0)
-        .optional()
-        .describe("Number of books to skip for pagination (default 0)"),
-    },
-    async ({ limit, offset }) => {
-      const result = listBooks(limit, offset);
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(result, null, 2) },
-        ],
-      };
-    },
+    "List EVERY book in the Library (no pagination). Use list_books unless you really want all rows; large libraries can blow past LLM context.",
+    {},
+    () => listAllBooks(),
   );
 
-  server.tool(
-    "describe_book",
-    "Get details of a particular book",
+  mcpTool(
+    server,
+    "get_book",
+    "Get details of a particular book.",
     { book_id: IdSchema.describe("Book ID (asset ID or numeric PK)") },
-    async ({ book_id }) => {
+    ({ book_id }: { book_id: string }) => {
       const book = getBookById(book_id);
-      if (!book) {
-        return { content: [{ type: "text" as const, text: "Book not found" }] };
-      }
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(book, null, 2) },
-        ],
-      };
+      if (!book) throw notFound("Book", book_id);
+      return book;
     },
   );
 
-  server.tool(
+  mcpTool(
+    server,
     "search_books",
-    "Search books by title, author, or genre",
+    "Search books by title, author, or genre (case-insensitive partial match).",
     {
       query: SearchQuerySchema.describe(
         "Search text to match against title, author, or genre",
       ),
     },
-    async ({ query }) => {
-      const books = searchBooks(query);
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(books, null, 2) },
-        ],
-      };
-    },
+    ({ query }: { query: string }) => searchBooks(query),
   );
 
-  // --- Annotation Tools (Read) ---
+  // --- Annotation tools (read) ---
 
-  server.tool(
-    "list_all_annotations",
-    "List all annotations in Apple Books",
-    {},
-    async () => {
-      const annotations = listAllAnnotations();
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(annotations, null, 2) },
-        ],
-      };
-    },
+  mcpTool(
+    server,
+    "list_annotations",
+    "List recent annotations across the Library, paginated. Filters out soft-deleted rows.",
+    Pagination,
+    ({ limit, offset }: { limit?: number; offset?: number }) =>
+      listAllAnnotations(limit, offset),
   );
 
-  server.tool(
+  mcpTool(
+    server,
     "get_book_annotations",
-    "Get all annotations for a particular book",
-    { book_id: IdSchema.describe("Book asset ID") },
-    async ({ book_id }) => {
-      // Only resolve via getBookById if input looks like a numeric PK
+    "Get all annotations for a particular book.",
+    { book_id: IdSchema.describe("Book asset ID or numeric PK") },
+    ({ book_id }: { book_id: string }) => {
+      // Resolve numeric PK input into ZASSETID; pass UUID-shaped input through.
       let assetId = book_id;
-      const numId = parseInt(book_id, 10);
-      if (!isNaN(numId) && String(numId) === book_id) {
+      const numId = Number.parseInt(book_id, 10);
+      if (!Number.isNaN(numId) && String(numId) === book_id) {
         const book = getBookById(book_id);
         if (book) assetId = book.assetId;
       }
-
-      const annotations = getAnnotationsByBookId(assetId);
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(annotations, null, 2) },
-        ],
-      };
+      return getAnnotationsByBookId(assetId);
     },
   );
 
-  server.tool(
-    "describe_annotation",
-    "Get details of a particular annotation",
+  mcpTool(
+    server,
+    "get_annotation",
+    "Get details of a particular annotation.",
     { annotation_id: IdSchema.describe("Annotation UUID or numeric PK") },
-    async ({ annotation_id }) => {
+    ({ annotation_id }: { annotation_id: string }) => {
       const annotation = getAnnotationById(annotation_id);
-      if (!annotation) {
-        return {
-          content: [{ type: "text" as const, text: "Annotation not found" }],
-        };
-      }
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(annotation, null, 2) },
-        ],
-      };
+      if (!annotation) throw notFound("Annotation", annotation_id);
+      return annotation;
     },
   );
 
-  server.tool(
+  mcpTool(
+    server,
     "get_highlights_by_color",
-    "Get all highlights by color (green, blue, yellow, pink, purple)",
+    "Get highlights of a given color, paginated. Filters out soft-deleted rows.",
     {
       color: HighlightColorSchema.describe(
-        "Highlight color: green, blue, yellow, pink, or purple",
+        "Highlight color (one of: green, blue, yellow, pink, purple)",
       ),
+      ...Pagination,
     },
-    async ({ color }) => {
-      const highlights = getHighlightsByColor(color);
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(highlights, null, 2) },
-        ],
-      };
-    },
+    ({
+      color,
+      limit,
+      offset,
+    }: {
+      color: "green" | "blue" | "yellow" | "pink" | "purple";
+      limit?: number;
+      offset?: number;
+    }) => getHighlightsByColor(color, limit, offset),
   );
 
-  server.tool(
+  mcpTool(
+    server,
     "search_highlighted_text",
-    "Search annotations by highlighted text",
+    "Search annotations by highlighted text (case-insensitive partial match).",
     { text: SearchQuerySchema.describe("Text to search for in highlights") },
-    async ({ text }) => {
-      const results = searchHighlightedText(text);
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(results, null, 2) },
-        ],
-      };
-    },
+    ({ text }: { text: string }) => searchHighlightedText(text),
   );
 
-  server.tool(
+  mcpTool(
+    server,
     "search_notes",
-    "Search annotations by note text",
+    "Search annotations by note text (case-insensitive partial match).",
     { note: SearchQuerySchema.describe("Text to search for in notes") },
-    async ({ note }) => {
-      const results = searchNotes(note);
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(results, null, 2) },
-        ],
-      };
-    },
+    ({ note }: { note: string }) => searchNotes(note),
   );
 
-  server.tool(
+  mcpTool(
+    server,
     "full_text_search",
-    "Search annotations by any text (highlights, notes, representative text)",
+    "Search annotations across highlight text, notes, and representative text.",
     {
       text: SearchQuerySchema.describe(
         "Text to search for across all annotation fields",
       ),
     },
-    async ({ text }) => {
-      const results = fullTextSearch(text);
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(results, null, 2) },
-        ],
-      };
-    },
+    ({ text }: { text: string }) => fullTextSearch(text),
   );
 
-  server.tool(
+  mcpTool(
+    server,
     "recent_annotations",
-    "Get 10 most recent annotations",
+    "Get the 10 most recently modified annotations.",
     {},
-    async () => {
-      const results = recentAnnotations();
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(results, null, 2) },
-        ],
-      };
-    },
+    () => recentAnnotations(),
   );
 
-  // --- Write Tools ---
+  // --- Write tools ---
+  //
+  // All four route through LibraryMutation, which: snapshots the Library,
+  // verifies the snapshot, quits Books.app *before* the change, runs in a
+  // BEGIN IMMEDIATE transaction with Z_OPT/mtime discipline, and relaunches
+  // Books.app on success. See src/db/library-mutation.ts.
 
-  server.tool(
+  mcpTool(
+    server,
     "add_book_to_collection",
-    "Add a book to a collection. Backs up the database and restarts Apple Books.",
+    "Add a book to a collection. Snapshots the Library and restarts Books.app.",
     {
       book_id: IdSchema.describe("Book ID (asset ID or numeric PK)"),
       collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)"),
     },
-    async ({ book_id, collection_id }) => {
-      const result = await addBookToCollection(book_id, collection_id);
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(result, null, 2) },
-        ],
-      };
-    },
+    ({
+      book_id,
+      collection_id,
+    }: {
+      book_id: string;
+      collection_id: string;
+    }) => addBookToCollection(book_id, collection_id),
   );
 
-  server.tool(
+  mcpTool(
+    server,
     "remove_book_from_collection",
-    "Remove a book from a collection. Backs up the database and restarts Apple Books.",
+    "Remove a book from a collection. Snapshots the Library and restarts Books.app.",
     {
       book_id: IdSchema.describe("Book ID (asset ID or numeric PK)"),
       collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)"),
     },
-    async ({ book_id, collection_id }) => {
-      const result = await removeBookFromCollection(book_id, collection_id);
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(result, null, 2) },
-        ],
-      };
-    },
+    ({
+      book_id,
+      collection_id,
+    }: {
+      book_id: string;
+      collection_id: string;
+    }) => removeBookFromCollection(book_id, collection_id),
   );
 
-  server.tool(
+  mcpTool(
+    server,
     "create_collection",
-    "Create a new collection in Apple Books. Backs up the database and restarts Apple Books.",
+    "Create a new collection. Snapshots the Library and restarts Books.app.",
     { name: CollectionNameSchema.describe("Name for the new collection") },
-    async ({ name }) => {
-      const result = await createCollection(name);
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(result, null, 2) },
-        ],
-      };
-    },
+    ({ name }: { name: string }) => createCollection(name),
   );
 
-  server.tool(
+  mcpTool(
+    server,
     "delete_collection",
-    "Delete a collection from Apple Books (soft delete). Backs up the database and restarts Apple Books.",
+    "Soft-delete a collection (sets ZDELETEDFLAG=1). Snapshots the Library and restarts Books.app.",
     { collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)") },
-    async ({ collection_id }) => {
-      const result = await deleteCollection(collection_id);
-      return {
-        content: [
-          { type: "text" as const, text: JSON.stringify(result, null, 2) },
-        ],
-      };
-    },
+    ({ collection_id }: { collection_id: string }) =>
+      deleteCollection(collection_id),
   );
 
   return server;
 }
 
 export async function serve(): Promise<void> {
+  // Validate the Apple Books schema up front. If a macOS upgrade has changed
+  // the Core Data layout, fail loud rather than silently corrupt user data.
+  try {
+    const result = validateLibrarySchema(getLibraryDb());
+    if (!result.ok) {
+      console.error(`apple-books-mcp: ${result.message}`);
+      console.error(
+        "apple-books-mcp: refusing to start; please open an issue with your macOS / Books version.",
+      );
+      process.exit(2);
+    }
+  } catch (error) {
+    // Most likely cause: Full Disk Access not granted, so we cannot read the
+    // Library file at all. Log a helpful pointer and exit.
+    console.error(
+      "apple-books-mcp: could not open the Apple Books library:",
+      error,
+    );
+    console.error(
+      "apple-books-mcp: this is usually a macOS Full Disk Access permission issue. " +
+        "See README.md for setup steps.",
+    );
+    process.exit(2);
+  }
+
   const server = createServer();
   const transport = new StdioServerTransport();
 

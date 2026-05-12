@@ -4,6 +4,14 @@
   "description": "MCP server for Apple Books with read and write support",
   "author": "Raghib Hasan",
   "license": "MIT",
+  "homepage": "https://github.com/ragmha/apple-books-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ragmha/apple-books-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ragmha/apple-books-mcp/issues"
+  },
   "keywords": [
     "mcp",
     "apple-books",
@@ -16,9 +24,23 @@
   "bin": {
     "apple-books-mcp": "src/index.ts"
   },
+  "files": [
+    "src",
+    "CONTEXT.md",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "os": [
+    "darwin"
+  ],
   "scripts": {
     "start": "bun run src/index.ts",
-    "dev": "bun run --watch src/index.ts"
+    "dev": "bun run --watch src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest"

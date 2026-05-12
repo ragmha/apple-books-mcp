@@ -6,6 +6,20 @@ export function escapeLikePattern(input: string): string {
   return input.replace(/[%_\\]/g, "\\$&");
 }
 
+/**
+ * Allow-list check for any string we will splice into SQL as an identifier
+ * (table name, column name, JOIN target). Apple Books' Core Data identifiers
+ * are all of the form `Z_*` or `Z<UPPER>*` plus `_` and digits, which fits
+ * the standard SQL identifier shape. Throwing here is the difference between
+ * "string interpolation is safe because the only callers pass constants" and
+ * "string interpolation is safe because the API enforces it."
+ */
+export function assertSqlIdentifier(s: string, role: string): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(s)) {
+    throw new Error(`Invalid SQL identifier for ${role}: ${JSON.stringify(s)}`);
+  }
+}
+
 type WhereOperator =
   | "="
   | "!="
@@ -105,21 +119,43 @@ export class QueryBuilder<T extends z.ZodType> {
   }
 
   join(table: string, on: string): this {
+    assertSqlIdentifier(table, "join table");
+    // ON clause is structurally complex (column = column); validate each
+    // identifier in the clause rather than allow-list the whole thing.
+    for (const ident of on.split(/[^A-Za-z0-9_.]+/).filter(Boolean)) {
+      // Allow `table.column` for join predicates.
+      for (const part of ident.split(".")) {
+        if (part) assertSqlIdentifier(part, "join ON identifier");
+      }
+    }
     this.joinClauses.push(`JOIN ${table} ON ${on}`);
     return this;
   }
 
   orderBy(column: string, direction: OrderDirection = "ASC"): this {
+    assertSqlIdentifier(column, "orderBy column");
     this.orderClauses.push({ column, direction });
     return this;
   }
 
   limit(n: number): this {
+    if (!Number.isInteger(n)) {
+      throw new Error(`limit must be an integer (got ${n})`);
+    }
+    if (n < 1) {
+      throw new Error(`limit must be a positive integer (got ${n})`);
+    }
     this.limitValue = n;
     return this;
   }
 
   offset(n: number): this {
+    if (!Number.isInteger(n)) {
+      throw new Error(`offset must be an integer (got ${n})`);
+    }
+    if (n < 0) {
+      throw new Error(`offset must be a non-negative integer (got ${n})`);
+    }
     this.offsetValue = n;
     return this;
   }
@@ -163,12 +199,16 @@ export class QueryBuilder<T extends z.ZodType> {
       sql += " ORDER BY " + orders.join(", ");
     }
 
-    // Limit & Offset
+    // Limit & Offset — bound as parameters, never interpolated. The
+    // numeric guards in `limit`/`offset` are belt-and-braces; SQLite
+    // accepts `?` here in 3.42+.
     if (this.limitValue != null) {
-      sql += ` LIMIT ${this.limitValue}`;
+      sql += " LIMIT ?";
+      params.push(this.limitValue);
     }
     if (this.offsetValue != null) {
-      sql += ` OFFSET ${this.offsetValue}`;
+      sql += " OFFSET ?";
+      params.push(this.offsetValue);
     }
 
     return { sql, params };

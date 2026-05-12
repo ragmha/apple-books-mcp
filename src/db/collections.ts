@@ -1,8 +1,4 @@
-import {
-  getLibraryDb,
-  getWritableLibraryDb,
-  getLibraryDbPath,
-} from "./connection.ts";
+import { getLibraryDb } from "./connection.ts";
 import { createDb } from "./query.ts";
 import {
   BookSchema,
@@ -11,10 +7,13 @@ import {
   type Book,
 } from "./schemas.ts";
 import { Tables, EntityTypes } from "./constants.ts";
-import { copyFileSync, readdirSync, unlinkSync } from "node:fs";
-import { dirname, basename, join } from "node:path";
 import { z } from "zod";
-import { $ } from "bun";
+import {
+  MutationError,
+  type LibraryTx,
+  type MutationResult,
+} from "./library-mutation.ts";
+import { productionMutation } from "./library-mutation-singleton.ts";
 
 export function listCollections(): Collection[] {
   const db = createDb(getLibraryDb());
@@ -84,392 +83,236 @@ export function getCollectionBooks(collectionId: string): Book[] {
 }
 
 // --- Write operations ---
-
-const MAX_BACKUPS = 5;
-
-function backupDatabase(): string {
-  const dbPath = getLibraryDbPath();
-  const backupPath = `${dbPath}.backup-${Date.now()}`;
-
-  // Checkpoint WAL to ensure backup includes all committed data
-  const db = getWritableLibraryDb();
-  db.run("PRAGMA wal_checkpoint(TRUNCATE)");
-
-  copyFileSync(dbPath, backupPath);
-
-  // Rotate old backups, keep only the most recent MAX_BACKUPS
-  const dir = dirname(dbPath);
-  const dbName = basename(dbPath);
-  const backups = readdirSync(dir)
-    .filter((f) => f.startsWith(`${dbName}.backup-`))
-    .sort()
-    .reverse();
-  for (const old of backups.slice(MAX_BACKUPS)) {
-    try {
-      unlinkSync(join(dir, old));
-    } catch {
-      // Best-effort cleanup
-    }
-  }
-
-  return backupPath;
-}
-
-async function restartAppleBooks(): Promise<void> {
-  try {
-    await $`osascript -e 'tell application "Books" to quit'`.quiet();
-    await Bun.sleep(1000);
-    await $`open -a Books`.quiet();
-  } catch (error) {
-    console.error("restartAppleBooks:", error);
-  }
-}
-
-function getNextPrimaryKey(
-  db: ReturnType<typeof getWritableLibraryDb>,
-  entityNum: number,
-): number {
-  db.run(`UPDATE ${Tables.PrimaryKey} SET Z_MAX = Z_MAX + 1 WHERE Z_ENT = ?`, [
-    entityNum,
-  ]);
-  const row = db
-    .query<
-      { Z_MAX: number },
-      [number]
-    >(`SELECT Z_MAX FROM ${Tables.PrimaryKey} WHERE Z_ENT = ?`)
-    .get(entityNum);
-  return row?.Z_MAX ?? 1;
-}
+//
+// All four mutating operations route through `LibraryMutation.mutate`:
+// the safety ceremony (snapshot, integrity-check, quit Books, BEGIN
+// IMMEDIATE, COMMIT/ROLLBACK, relaunch Books, sanitised errors) lives in
+// one place and Core Data row mechanics (Z_PK allocation, Z_ENT, Z_OPT,
+// mtimes) are baked into LibraryTx so callers can't forget them.
+//
+// Each `*Tx` function is the pure description of "what changes" — exported
+// so tests can drive it against an in-memory fake without touching the
+// real Apple Books library.
 
 export async function addBookToCollection(
   bookId: string,
   collectionId: string,
 ): Promise<{ success: boolean; message: string }> {
-  let backupPath: string;
-  try {
-    backupPath = backupDatabase();
-  } catch (error) {
-    return { success: false, message: `Backup failed: ${error}` };
+  const result = await productionMutation().mutate((tx) =>
+    addBookToCollectionTx(tx, bookId, collectionId),
+  );
+  return mutationResultToLegacyShape(result, "Added book to collection.");
+}
+
+/**
+ * Pure description of "add this book to this collection" against an open
+ * LibraryTx. Throws MutationError for user-visible problems (book or
+ * collection not found, already a member). Exported so tests can drive it
+ * with fakes without touching the real Library on disk.
+ */
+export function addBookToCollectionTx(
+  tx: LibraryTx,
+  bookId: string,
+  collectionId: string,
+): { bookPk: number; collectionPk: number } {
+  const numBookId = Number.parseInt(bookId, 10);
+  const book = tx.query<{ Z_PK: number; ZASSETID: string }>(
+    `SELECT Z_PK, ZASSETID FROM ${Tables.Books}
+     WHERE ZASSETID = ? OR Z_PK = ?`,
+    [bookId, Number.isNaN(numBookId) ? -1 : numBookId],
+  );
+  if (!book) throw new MutationError(`Book not found: ${bookId}`);
+
+  const numCollId = Number.parseInt(collectionId, 10);
+  const collection = tx.query<{ Z_PK: number }>(
+    `SELECT Z_PK FROM ${Tables.Collections}
+     WHERE ZCOLLECTIONID = ? OR Z_PK = ?`,
+    [collectionId, Number.isNaN(numCollId) ? -1 : numCollId],
+  );
+  if (!collection) {
+    throw new MutationError(`Collection not found: ${collectionId}`);
   }
 
-  try {
-    const db = getWritableLibraryDb();
-    db.run("BEGIN IMMEDIATE");
+  const existing = tx.query(
+    `SELECT 1 FROM ${Tables.CollectionMembers}
+     WHERE ZCOLLECTION = ? AND ZASSET = ?`,
+    [collection.Z_PK, book.Z_PK],
+  );
+  if (existing) {
+    throw new MutationError("Book is already in this collection");
+  }
 
-    try {
-      // Resolve book
-      let bookPk: number | null = null;
-      let assetId: string | null = null;
-      const bookByAsset = db
-        .query<
-          { Z_PK: number; ZASSETID: string },
-          [string]
-        >(`SELECT Z_PK, ZASSETID FROM ${Tables.Books} WHERE ZASSETID = ?`)
-        .get(bookId);
-      if (bookByAsset) {
-        bookPk = bookByAsset.Z_PK;
-        assetId = bookByAsset.ZASSETID;
-      } else {
-        const numId = parseInt(bookId, 10);
-        if (!isNaN(numId)) {
-          const bookByPk = db
-            .query<
-              { Z_PK: number; ZASSETID: string },
-              [number]
-            >(`SELECT Z_PK, ZASSETID FROM ${Tables.Books} WHERE Z_PK = ?`)
-            .get(numId);
-          if (bookByPk) {
-            bookPk = bookByPk.Z_PK;
-            assetId = bookByPk.ZASSETID;
-          }
-        }
-      }
-      if (bookPk == null || assetId == null) {
-        db.run("ROLLBACK");
-        return { success: false, message: `Book not found: ${bookId}` };
-      }
+  const next = tx.query<{ k: number | null }>(
+    `SELECT MAX(ZSORTKEY) AS k FROM ${Tables.CollectionMembers}
+     WHERE ZCOLLECTION = ?`,
+    [collection.Z_PK],
+  );
 
-      // Resolve collection
-      let collectionPk: number | null = null;
-      const collByUuid = db
-        .query<
-          { Z_PK: number },
-          [string]
-        >(`SELECT Z_PK FROM ${Tables.Collections} WHERE ZCOLLECTIONID = ?`)
-        .get(collectionId);
-      if (collByUuid) {
-        collectionPk = collByUuid.Z_PK;
-      } else {
-        const numId = parseInt(collectionId, 10);
-        if (!isNaN(numId)) collectionPk = numId;
-      }
-      if (collectionPk == null) {
-        db.run("ROLLBACK");
-        return {
-          success: false,
-          message: `Collection not found: ${collectionId}`,
-        };
-      }
+  tx.insert(Tables.CollectionMembers, EntityTypes.CollectionMember, {
+    ZSORTKEY: (next?.k ?? 0) + 1,
+    ZASSET: book.Z_PK,
+    ZCOLLECTION: collection.Z_PK,
+    ZASSETID: book.ZASSETID,
+  });
 
-      // Check if already a member
-      const existing = db
-        .query<
-          { Z_PK: number },
-          [number, number]
-        >(`SELECT Z_PK FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ? AND ZASSET = ?`)
-        .get(collectionPk, bookPk);
-      if (existing) {
-        db.run("ROLLBACK");
-        return { success: true, message: "Book is already in this collection" };
-      }
+  // Bump parent Collection's mtime so Apple Books picks up the change on
+  // next launch and iCloud syncs it. tx.update bakes in Z_OPT discipline.
+  tx.update(Tables.Collections, collection.Z_PK, {});
 
-      // Get next sort key
-      const maxSort = db
-        .query<
-          { maxKey: number | null },
-          [number]
-        >(`SELECT MAX(ZSORTKEY) as maxKey FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ?`)
-        .get(collectionPk);
-      const sortKey = (maxSort?.maxKey ?? 0) + 1;
+  return { bookPk: book.Z_PK, collectionPk: collection.Z_PK };
+}
 
-      const newPk = getNextPrimaryKey(db, EntityTypes.CollectionMember);
-      const now = Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
-
-      db.run(
-        `INSERT INTO ${Tables.CollectionMembers} (Z_PK, Z_ENT, Z_OPT, ZSORTKEY, ZASSET, ZCOLLECTION, ZLOCALMODDATE, ZASSETID)
-         VALUES (?, ${EntityTypes.CollectionMember}, 1, ?, ?, ?, ?, ?)`,
-        [newPk, sortKey, bookPk, collectionPk, now, assetId],
-      );
-
-      db.run("COMMIT");
-    } catch (error) {
-      db.run("ROLLBACK");
-      throw error;
-    }
-
-    await restartAppleBooks();
+function mutationResultToLegacyShape<T>(
+  result: MutationResult<T>,
+  successMessage: string,
+): { success: boolean; message: string } {
+  if (result.success) {
     return {
       success: true,
-      message: "Added book to collection. Database backup created.",
-    };
-  } catch (error) {
-    console.error("addBookToCollection error:", error, "Backup:", backupPath);
-    return {
-      success: false,
-      message: "Operation failed. Database backup created.",
+      message: `${successMessage} Database backup: ${result.backupPath}`,
     };
   }
+  return { success: false, message: result.message };
 }
+
+// --- Legacy write helpers (still used by removeBookFromCollection,
+// createCollection, and deleteCollection until those are migrated to
+// LibraryMutation as well). ---
 
 export async function removeBookFromCollection(
   bookId: string,
   collectionId: string,
 ): Promise<{ success: boolean; message: string }> {
-  let backupPath: string;
-  try {
-    backupPath = backupDatabase();
-  } catch (error) {
-    return { success: false, message: `Backup failed: ${error}` };
+  const result = await productionMutation().mutate((tx) =>
+    removeBookFromCollectionTx(tx, bookId, collectionId),
+  );
+  return mutationResultToLegacyShape(result, "Removed book from collection.");
+}
+
+/**
+ * Pure description of "remove this book from this collection" against an
+ * open LibraryTx. Throws MutationError for user-visible problems.
+ */
+export function removeBookFromCollectionTx(
+  tx: LibraryTx,
+  bookId: string,
+  collectionId: string,
+): { bookPk: number; collectionPk: number } {
+  const numBookId = Number.parseInt(bookId, 10);
+  const book = tx.query<{ Z_PK: number }>(
+    `SELECT Z_PK FROM ${Tables.Books}
+     WHERE ZASSETID = ? OR Z_PK = ?`,
+    [bookId, Number.isNaN(numBookId) ? -1 : numBookId],
+  );
+  if (!book) throw new MutationError(`Book not found: ${bookId}`);
+
+  const numCollId = Number.parseInt(collectionId, 10);
+  const collection = tx.query<{ Z_PK: number }>(
+    `SELECT Z_PK FROM ${Tables.Collections}
+     WHERE ZCOLLECTIONID = ? OR Z_PK = ?`,
+    [collectionId, Number.isNaN(numCollId) ? -1 : numCollId],
+  );
+  if (!collection) {
+    throw new MutationError(`Collection not found: ${collectionId}`);
   }
 
-  try {
-    const db = getWritableLibraryDb();
-    db.run("BEGIN IMMEDIATE");
-
-    try {
-      // Resolve book Z_PK
-      let bookPk: number | null = null;
-      const bookByAsset = db
-        .query<
-          { Z_PK: number },
-          [string]
-        >(`SELECT Z_PK FROM ${Tables.Books} WHERE ZASSETID = ?`)
-        .get(bookId);
-      if (bookByAsset) {
-        bookPk = bookByAsset.Z_PK;
-      } else {
-        const numId = parseInt(bookId, 10);
-        if (!isNaN(numId)) bookPk = numId;
-      }
-      if (bookPk == null) {
-        db.run("ROLLBACK");
-        return { success: false, message: `Book not found: ${bookId}` };
-      }
-
-      // Resolve collection Z_PK
-      let collectionPk: number | null = null;
-      const collByUuid = db
-        .query<
-          { Z_PK: number },
-          [string]
-        >(`SELECT Z_PK FROM ${Tables.Collections} WHERE ZCOLLECTIONID = ?`)
-        .get(collectionId);
-      if (collByUuid) {
-        collectionPk = collByUuid.Z_PK;
-      } else {
-        const numId = parseInt(collectionId, 10);
-        if (!isNaN(numId)) collectionPk = numId;
-      }
-      if (collectionPk == null) {
-        db.run("ROLLBACK");
-        return {
-          success: false,
-          message: `Collection not found: ${collectionId}`,
-        };
-      }
-
-      const result = db.run(
-        `DELETE FROM ${Tables.CollectionMembers} WHERE ZCOLLECTION = ? AND ZASSET = ?`,
-        [collectionPk, bookPk],
-      );
-
-      if (result.changes === 0) {
-        db.run("ROLLBACK");
-        return { success: false, message: "Book was not in this collection" };
-      }
-
-      db.run("COMMIT");
-    } catch (error) {
-      db.run("ROLLBACK");
-      throw error;
-    }
-
-    await restartAppleBooks();
-    return {
-      success: true,
-      message: "Removed book from collection. Database backup created.",
-    };
-  } catch (error) {
-    console.error(
-      "removeBookFromCollection error:",
-      error,
-      "Backup:",
-      backupPath,
-    );
-    return {
-      success: false,
-      message: "Operation failed. Database backup created.",
-    };
+  const existing = tx.query<{ Z_PK: number }>(
+    `SELECT Z_PK FROM ${Tables.CollectionMembers}
+     WHERE ZCOLLECTION = ? AND ZASSET = ?`,
+    [collection.Z_PK, book.Z_PK],
+  );
+  if (!existing) {
+    throw new MutationError("Book is not in this collection");
   }
+
+  tx.run(
+    `DELETE FROM ${Tables.CollectionMembers}
+     WHERE ZCOLLECTION = ? AND ZASSET = ?`,
+    [collection.Z_PK, book.Z_PK],
+  );
+
+  // Bump parent Collection's mtime + Z_OPT for iCloud sync.
+  tx.update(Tables.Collections, collection.Z_PK, {});
+
+  return { bookPk: book.Z_PK, collectionPk: collection.Z_PK };
 }
 
 export async function createCollection(
   name: string,
 ): Promise<{ success: boolean; message: string; collectionId?: string }> {
-  let backupPath: string;
-  try {
-    backupPath = backupDatabase();
-  } catch (error) {
-    return { success: false, message: `Backup failed: ${error}` };
-  }
-
-  try {
-    const db = getWritableLibraryDb();
-    const collectionUuid = crypto.randomUUID().toUpperCase();
-    db.run("BEGIN IMMEDIATE");
-
-    try {
-      // Get max sort key
-      const maxSort = db
-        .query<
-          { maxKey: number | null },
-          []
-        >(`SELECT MAX(ZSORTKEY) as maxKey FROM ${Tables.Collections}`)
-        .get();
-      const sortKey = (maxSort?.maxKey ?? 0) + 1;
-
-      const newPk = getNextPrimaryKey(db, EntityTypes.Collection);
-      const now = Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
-
-      db.run(
-        `INSERT INTO ${Tables.Collections} (Z_PK, Z_ENT, Z_OPT, ZDELETEDFLAG, ZHIDDEN, ZPLACEHOLDER, ZSORTKEY, ZSORTMODE, ZVIEWMODE, ZLASTMODIFICATION, ZLOCALMODDATE, ZCOLLECTIONID, ZDETAILS, ZTITLE)
-         VALUES (?, ${EntityTypes.Collection}, 1, 0, 0, 0, ?, 0, 0, ?, ?, ?, NULL, ?)`,
-        [newPk, sortKey, now, now, collectionUuid, name],
-      );
-
-      db.run("COMMIT");
-    } catch (error) {
-      db.run("ROLLBACK");
-      throw error;
-    }
-
-    await restartAppleBooks();
+  const result = await productionMutation().mutate((tx) =>
+    createCollectionTx(tx, name),
+  );
+  if (result.success) {
     return {
       success: true,
-      message: `Created collection "${name}". Database backup created.`,
-      collectionId: collectionUuid,
-    };
-  } catch (error) {
-    console.error("createCollection error:", error, "Backup:", backupPath);
-    return {
-      success: false,
-      message: "Operation failed. Database backup created.",
+      message: `Created collection "${name}". Database backup: ${result.backupPath}`,
+      collectionId: result.data.collectionId,
     };
   }
+  return { success: false, message: result.message };
+}
+
+/**
+ * Pure description of "create a new collection named X" against an open
+ * LibraryTx. Returns the freshly-allocated collection UUID so callers can
+ * surface it.
+ */
+export function createCollectionTx(
+  tx: LibraryTx,
+  name: string,
+): { collectionId: string; pk: number } {
+  const collectionUuid = crypto.randomUUID().toUpperCase();
+
+  const maxSort = tx.query<{ maxKey: number | null }>(
+    `SELECT MAX(ZSORTKEY) as maxKey FROM ${Tables.Collections}`,
+  );
+  const sortKey = (maxSort?.maxKey ?? 0) + 1;
+
+  const pk = tx.insert(Tables.Collections, EntityTypes.Collection, {
+    ZDELETEDFLAG: 0,
+    ZHIDDEN: 0,
+    ZSORTKEY: sortKey,
+    ZLASTMODIFICATION: nowAsCoreDataTimestamp(),
+    ZCOLLECTIONID: collectionUuid,
+    ZTITLE: name,
+  });
+
+  return { collectionId: collectionUuid, pk };
+}
+
+function nowAsCoreDataTimestamp(): number {
+  return Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
 }
 
 export async function deleteCollection(
   collectionId: string,
 ): Promise<{ success: boolean; message: string }> {
-  let backupPath: string;
-  try {
-    backupPath = backupDatabase();
-  } catch (error) {
-    return { success: false, message: `Backup failed: ${error}` };
+  const result = await productionMutation().mutate((tx) =>
+    deleteCollectionTx(tx, collectionId),
+  );
+  return mutationResultToLegacyShape(result, "Deleted collection.");
+}
+
+/**
+ * Pure description of "soft-delete this collection" against an open
+ * LibraryTx. tx.softDelete bakes in ZDELETEDFLAG=1, mtime refresh, and the
+ * Z_OPT bump that the previous implementation forgot.
+ */
+export function deleteCollectionTx(
+  tx: LibraryTx,
+  collectionId: string,
+): { collectionPk: number } {
+  const numCollId = Number.parseInt(collectionId, 10);
+  const collection = tx.query<{ Z_PK: number }>(
+    `SELECT Z_PK FROM ${Tables.Collections}
+     WHERE ZCOLLECTIONID = ? OR Z_PK = ?`,
+    [collectionId, Number.isNaN(numCollId) ? -1 : numCollId],
+  );
+  if (!collection) {
+    throw new MutationError(`Collection not found: ${collectionId}`);
   }
 
-  try {
-    const db = getWritableLibraryDb();
-    const now = Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
-    db.run("BEGIN IMMEDIATE");
-
-    try {
-      // Soft delete: set ZDELETEDFLAG = 1
-      const result = db.run(
-        `UPDATE ${Tables.Collections} SET ZDELETEDFLAG = 1, ZLASTMODIFICATION = ?, ZLOCALMODDATE = ? WHERE ZCOLLECTIONID = ?`,
-        [now, now, collectionId],
-      );
-
-      if (result.changes === 0) {
-        // Try by Z_PK
-        const numId = parseInt(collectionId, 10);
-        if (!isNaN(numId)) {
-          const result2 = db.run(
-            `UPDATE ${Tables.Collections} SET ZDELETEDFLAG = 1, ZLASTMODIFICATION = ?, ZLOCALMODDATE = ? WHERE Z_PK = ?`,
-            [now, now, numId],
-          );
-          if (result2.changes === 0) {
-            db.run("ROLLBACK");
-            return {
-              success: false,
-              message: `Collection not found: ${collectionId}`,
-            };
-          }
-        } else {
-          db.run("ROLLBACK");
-          return {
-            success: false,
-            message: `Collection not found: ${collectionId}`,
-          };
-        }
-      }
-
-      db.run("COMMIT");
-    } catch (error) {
-      db.run("ROLLBACK");
-      throw error;
-    }
-
-    await restartAppleBooks();
-    return {
-      success: true,
-      message: "Deleted collection. Database backup created.",
-    };
-  } catch (error) {
-    console.error("deleteCollection error:", error, "Backup:", backupPath);
-    return {
-      success: false,
-      message: "Operation failed. Database backup created.",
-    };
-  }
+  tx.softDelete(Tables.Collections, collection.Z_PK);
+  return { collectionPk: collection.Z_PK };
 }
