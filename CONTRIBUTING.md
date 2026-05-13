@@ -8,14 +8,16 @@ tested, and explicit about safety behavior.
 ## Local setup
 
 ```bash
+nvm use
 bun install
 bun run check
 bun run typecheck
 bun test
 ```
 
-The test suite uses in-memory SQLite fixtures and fake Books.app adapters.
-It should not touch your real Apple Books library.
+The `.nvmrc` pins the Node/npm publishing toolchain. The test suite uses
+in-memory SQLite fixtures and fake Books.app adapters. It should not touch
+your real Apple Books library.
 
 ## Development loop
 
