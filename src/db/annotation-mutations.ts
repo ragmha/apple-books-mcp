@@ -1,19 +1,25 @@
-import type { LibraryTx } from "./library-mutation.ts";
-import { MutationError } from "./library-mutation.ts";
-import { coreDataNow } from "./core-data.ts";
-import { productionAnnotationMutation } from "./library-mutation-singleton.ts";
 import { Tables } from "./constants.ts";
-
-import type { MutationResult } from "./library-mutation.ts";
+import { coreDataNow } from "./core-data.ts";
+import type { LibraryTx, MutationResult } from "./library-mutation.ts";
+import { MutationError } from "./library-mutation.ts";
+import { productionAnnotationMutation } from "./library-mutation-singleton.ts";
 
 function mutationResultToLegacyShape<T>(
   result: MutationResult<T>,
   successMessage: string,
 ): { success: boolean; message: string; backupPath?: string } {
   if (result.success) {
-    return { success: true, message: successMessage, backupPath: result.backupPath };
+    return {
+      success: true,
+      message: successMessage,
+      backupPath: result.backupPath,
+    };
   }
-  return { success: false, message: result.message, backupPath: result.backupPath };
+  return {
+    success: false,
+    message: result.message,
+    backupPath: result.backupPath,
+  };
 }
 
 interface AnnotationRow {
@@ -74,9 +80,7 @@ export function deleteAnnotationTx(
 ): { annotationPk: number } {
   const row = resolveAnnotation(tx, annotationId);
   if (row.ZANNOTATIONDELETED === 1) {
-    throw new MutationError(
-      `Annotation ${annotationId} is already deleted.`,
-    );
+    throw new MutationError(`Annotation ${annotationId} is already deleted.`);
   }
   tx.run(
     `UPDATE ${Tables.Annotations}

@@ -1,25 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import {
-  addBookToCollectionTx,
-} from "../src/db/collections.ts";
+import { addBookToCollectionTx } from "../src/db/collections.ts";
+import { Tables } from "../src/db/constants.ts";
 import {
   createLibraryMutation,
   MutationError,
 } from "../src/db/library-mutation.ts";
-import { Tables } from "../src/db/constants.ts";
-import { createSeededDb, seedBook, seedCollection } from "./helpers/seed.ts";
 import { FakeBooksAppPort, FakeLibraryStore } from "./helpers/fakes.ts";
+import { createSeededDb, seedBook, seedCollection } from "./helpers/seed.ts";
 
 describe("addBookToCollection integration", () => {
   test("adds an existing book to an existing collection and bumps the parent collection's mtime", async () => {
     const db = createSeededDb();
     seedBook(db, { pk: 1, assetId: "asset-A", title: "Book A" });
     seedCollection(db, { pk: 1, uuid: "uuid-coll", title: "Favourites" });
-    const collMtimeBefore = db
+    const collMtimeRow = db
       .query<{ ZLOCALMODDATE: number }, []>(
         `SELECT ZLOCALMODDATE FROM ${Tables.Collections}`,
       )
-      .get()!.ZLOCALMODDATE;
+      .get();
+    if (!collMtimeRow) {
+      throw new Error("Expected seeded collection");
+    }
+    const collMtimeBefore = collMtimeRow.ZLOCALMODDATE;
 
     const calls: string[] = [];
     const store = new FakeLibraryStore(db, calls);
@@ -39,16 +41,17 @@ describe("addBookToCollection integration", () => {
         `SELECT ZASSET, ZCOLLECTION, ZASSETID FROM ${Tables.CollectionMembers}`,
       )
       .all();
-    expect(joins).toEqual([
-      { ZASSET: 1, ZCOLLECTION: 1, ZASSETID: "asset-A" },
-    ]);
+    expect(joins).toEqual([{ ZASSET: 1, ZCOLLECTION: 1, ZASSETID: "asset-A" }]);
 
     // Parent collection's mtime was refreshed and Z_OPT bumped.
     const coll = db
       .query<{ Z_OPT: number; ZLOCALMODDATE: number }, []>(
         `SELECT Z_OPT, ZLOCALMODDATE FROM ${Tables.Collections}`,
       )
-      .get()!;
+      .get();
+    if (!coll) {
+      throw new Error("Expected updated collection");
+    }
     expect(coll.Z_OPT).toBe(2);
     expect(coll.ZLOCALMODDATE).toBeGreaterThan(collMtimeBefore);
 

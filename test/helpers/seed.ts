@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { Tables, EntityTypes } from "../../src/db/constants.ts";
+import { EntityTypes, Tables } from "../../src/db/constants.ts";
 
 /**
  * Build a fresh in-memory SQLite seeded with the minimum Apple Books

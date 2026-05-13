@@ -14,7 +14,9 @@ export function coreDataNow(): number {
 }
 
 /** Convert a Core Data timestamp to an ISO-8601 string, or null if absent. */
-export function coreDataToISO(timestamp: number | null | undefined): string | null {
+export function coreDataToISO(
+  timestamp: number | null | undefined,
+): string | null {
   if (timestamp == null) return null;
   return new Date((timestamp + CORE_DATA_EPOCH_OFFSET_S) * 1000).toISOString();
 }

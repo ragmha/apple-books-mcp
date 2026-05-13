@@ -1,11 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import {
-  removeBookFromCollectionTx,
-} from "../src/db/collections.ts";
-import { createLibraryMutation } from "../src/db/library-mutation.ts";
+import { removeBookFromCollectionTx } from "../src/db/collections.ts";
 import { Tables } from "../src/db/constants.ts";
-import { createSeededDb, seedBook, seedCollection } from "./helpers/seed.ts";
+import { createLibraryMutation } from "../src/db/library-mutation.ts";
 import { FakeBooksAppPort, FakeLibraryStore } from "./helpers/fakes.ts";
+import { createSeededDb, seedBook, seedCollection } from "./helpers/seed.ts";
 
 describe("removeBookFromCollection integration", () => {
   test("removes the join row and refreshes the parent collection's mtime", async () => {
@@ -32,10 +30,11 @@ describe("removeBookFromCollection integration", () => {
     );
 
     const coll = db
-      .query<{ Z_OPT: number }, []>(
-        `SELECT Z_OPT FROM ${Tables.Collections}`,
-      )
-      .get()!;
+      .query<{ Z_OPT: number }, []>(`SELECT Z_OPT FROM ${Tables.Collections}`)
+      .get();
+    if (!coll) {
+      throw new Error("Expected updated collection");
+    }
     expect(coll.Z_OPT).toBe(2);
   });
 

@@ -26,9 +26,12 @@
   },
   "files": [
     "src",
+    "CHANGELOG.md",
     "CONTEXT.md",
+    "CONTRIBUTING.md",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "SECURITY.md"
   ],
   "engines": {
     "bun": ">=1.0.0"
@@ -39,10 +42,15 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun run --watch src/index.ts",
+    "format": "biome format --write .",
+    "format:check": "biome format --check .",
+    "lint": "biome lint .",
+    "check": "biome check .",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.15",
     "@types/bun": "latest"
   },
   "peerDependencies": {

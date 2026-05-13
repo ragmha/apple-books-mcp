@@ -1,7 +1,7 @@
-import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { createDb } from "../src/db/query.ts";
+import { describe, expect, test } from "bun:test";
 import { z } from "zod";
+import { createDb } from "../src/db/query.ts";
 
 const Row = z.object({ id: z.number(), name: z.string() });
 
@@ -17,9 +17,9 @@ function makeDb(): Database {
 describe("QueryBuilder.limit / offset safety", () => {
   test("rejects non-integer limits", () => {
     const db = createDb(makeDb());
-    expect(() =>
-      db.selectFrom("t", Row).selectAll().limit(10.5),
-    ).toThrow(/integer/i);
+    expect(() => db.selectFrom("t", Row).selectAll().limit(10.5)).toThrow(
+      /integer/i,
+    );
   });
 
   test("rejects negative limits", () => {
@@ -45,9 +45,9 @@ describe("QueryBuilder.limit / offset safety", () => {
 
   test("rejects non-integer offset", () => {
     const db = createDb(makeDb());
-    expect(() =>
-      db.selectFrom("t", Row).selectAll().offset(2.7),
-    ).toThrow(/integer/i);
+    expect(() => db.selectFrom("t", Row).selectAll().offset(2.7)).toThrow(
+      /integer/i,
+    );
   });
 
   test("accepts valid limit and offset and binds them as parameters (not interpolated)", () => {
@@ -70,18 +70,15 @@ describe("QueryBuilder.orderBy identifier allow-list", () => {
   test("rejects an obvious SQL-injection attempt", () => {
     const db = createDb(makeDb());
     expect(() =>
-      db
-        .selectFrom("t", Row)
-        .selectAll()
-        .orderBy("id; DROP TABLE t --"),
+      db.selectFrom("t", Row).selectAll().orderBy("id; DROP TABLE t --"),
     ).toThrow(/identifier/i);
   });
 
   test("rejects a column starting with a digit", () => {
     const db = createDb(makeDb());
-    expect(() =>
-      db.selectFrom("t", Row).selectAll().orderBy("1bad"),
-    ).toThrow(/identifier/i);
+    expect(() => db.selectFrom("t", Row).selectAll().orderBy("1bad")).toThrow(
+      /identifier/i,
+    );
   });
 
   test("rejects an empty column", () => {

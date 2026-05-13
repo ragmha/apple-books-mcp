@@ -18,7 +18,7 @@ interface AnnotationExportRow {
  * structural character users might have typed.
  */
 function escapeMarkdown(text: string): string {
-  return text.replace(/([\\`*_{}\[\]<>()#+!|])/g, "\\$1");
+  return text.replace(/([\\`*_{}[\]<>()#+!|])/g, "\\$1");
 }
 
 function formatSelectedText(text: string): string {
@@ -84,19 +84,23 @@ export function exportAnnotationsMarkdown(
   const out: string[] = ["# Annotations export"];
   if (rows.length === 0) {
     out.push("", "_No annotations._");
-    return out.join("\n") + "\n";
+    return `${out.join("\n")}\n`;
   }
   const byBook = new Map<string, AnnotationExportRow[]>();
   for (const row of rows) {
     const aid = row.ZANNOTATIONASSETID ?? "(unknown)";
-    if (!byBook.has(aid)) byBook.set(aid, []);
-    byBook.get(aid)!.push(row);
+    const items = byBook.get(aid);
+    if (items) {
+      items.push(row);
+    } else {
+      byBook.set(aid, [row]);
+    }
   }
   for (const [book, items] of byBook) {
     out.push("", `## ${book}`, "");
     out.push(items.map(formatAnnotation).join("\n\n---\n\n"));
   }
-  return out.join("\n") + "\n";
+  return `${out.join("\n")}\n`;
 }
 
 /**
@@ -104,9 +108,10 @@ export function exportAnnotationsMarkdown(
  * returns the rendered markdown plus a count. The Annotations DB is
  * untouched.
  */
-export function exportAnnotationsMarkdownForBook(
-  assetId?: string,
-): { assetId: string | null; markdown: string } {
+export function exportAnnotationsMarkdownForBook(assetId?: string): {
+  assetId: string | null;
+  markdown: string;
+} {
   const md = exportAnnotationsMarkdown(getAnnotationDb(), assetId);
   return { assetId: assetId ?? null, markdown: md };
 }

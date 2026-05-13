@@ -1,10 +1,10 @@
+import { filesystemAnnotationStore } from "./annotation-store.ts";
+import { osascriptBooksAppPort } from "./books-app-port.ts";
 import {
   createLibraryMutation,
   type LibraryMutation,
 } from "./library-mutation.ts";
-import { osascriptBooksAppPort } from "./books-app-port.ts";
 import { filesystemLibraryStore } from "./library-store.ts";
-import { filesystemAnnotationStore } from "./annotation-store.ts";
 
 /**
  * Lazily-constructed production singletons. Tests should not import these;

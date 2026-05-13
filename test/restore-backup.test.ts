@@ -1,15 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { createLibraryMutation } from "../src/db/library-mutation.ts";
-import { createSeededDb } from "./helpers/seed.ts";
 import { FakeBooksAppPort, FakeLibraryStore } from "./helpers/fakes.ts";
+import { createSeededDb } from "./helpers/seed.ts";
 
 describe("LibraryMutation.listBackups", () => {
   test("delegates to the store and returns the list", () => {
     const db = createSeededDb();
     const store = new FakeLibraryStore(db);
     store.backups = [
-      { handle: "fake-snapshot-2", createdAt: "2026-01-02T00:00:00.000Z", sizeBytes: 200 },
-      { handle: "fake-snapshot-1", createdAt: "2026-01-01T00:00:00.000Z", sizeBytes: 100 },
+      {
+        handle: "fake-snapshot-2",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        sizeBytes: 200,
+      },
+      {
+        handle: "fake-snapshot-1",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        sizeBytes: 100,
+      },
     ];
     const mutation = createLibraryMutation(store, new FakeBooksAppPort());
 
@@ -31,7 +39,11 @@ describe("LibraryMutation.restore", () => {
     const callLog: string[] = [];
     const store = new FakeLibraryStore(db, callLog);
     store.backups = [
-      { handle: "backup-A", createdAt: "2026-01-01T00:00:00.000Z", sizeBytes: 100 },
+      {
+        handle: "backup-A",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        sizeBytes: 100,
+      },
     ];
     const books = new FakeBooksAppPort({ running: true, callLog });
     const mutation = createLibraryMutation(store, books);
@@ -111,7 +123,9 @@ describe("LibraryMutation.restore", () => {
     const db = createSeededDb();
     const callLog: string[] = [];
     const store = new FakeLibraryStore(db, callLog);
-    store.restoreError = new Error("EACCES: permission denied — /Users/x/notes.txt");
+    store.restoreError = new Error(
+      "EACCES: permission denied — /Users/x/notes.txt",
+    );
     const books = new FakeBooksAppPort({ running: false, callLog });
     const mutation = createLibraryMutation(store, books);
 

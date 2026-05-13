@@ -1,20 +1,20 @@
-import { getLibraryDb } from "./connection.ts";
-import { createDb } from "./query.ts";
-import {
-  BookSchema,
-  CollectionSchema,
-  type Collection,
-  type Book,
-} from "./schemas.ts";
-import { Tables, EntityTypes } from "./constants.ts";
-import { coreDataNow } from "./core-data.ts";
 import { z } from "zod";
+import { getLibraryDb } from "./connection.ts";
+import { EntityTypes, Tables } from "./constants.ts";
+import { coreDataNow } from "./core-data.ts";
 import {
-  MutationError,
   type LibraryTx,
+  MutationError,
   type MutationResult,
 } from "./library-mutation.ts";
 import { productionMutation } from "./library-mutation-singleton.ts";
+import { createDb } from "./query.ts";
+import {
+  type Book,
+  BookSchema,
+  type Collection,
+  CollectionSchema,
+} from "./schemas.ts";
 
 export function listCollections(): Collection[] {
   const db = createDb(getLibraryDb());
@@ -38,7 +38,7 @@ export function getCollectionById(collectionId: string): Collection | null {
 
   if (!collection) {
     const numId = parseInt(collectionId, 10);
-    if (!isNaN(numId)) {
+    if (!Number.isNaN(numId)) {
       collection = db
         .selectFrom(Tables.Collections, CollectionSchema)
         .selectAll()
@@ -67,7 +67,7 @@ export function getCollectionBooks(collectionId: string): Book[] {
     collectionPk = byId.Z_PK;
   } else {
     const numId = parseInt(collectionId, 10);
-    if (!isNaN(numId)) collectionPk = numId;
+    if (!Number.isNaN(numId)) collectionPk = numId;
   }
   if (collectionPk == null) return [];
 

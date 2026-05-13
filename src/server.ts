@@ -1,42 +1,38 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-
+import { exportAnnotationsMarkdownForBook } from "./db/annotation-export.ts";
 import {
+  deleteAnnotation,
+  updateAnnotationNote,
+} from "./db/annotation-mutations.ts";
+import {
+  fullTextSearch,
+  getAnnotationById,
+  getAnnotationsByBookId,
+  getHighlightsByColor,
+  listAllAnnotations,
+  recentAnnotations,
+  searchHighlightedText,
+  searchNotes,
+} from "./db/annotations.ts";
+import { listLibraryBackups, restoreLibraryFromBackup } from "./db/backups.ts";
+import {
+  getBookById,
   listAllBooks,
   listBooks,
-  getBookById,
   searchBooks,
 } from "./db/books.ts";
 import {
-  listCollections,
-  getCollectionById,
-  getCollectionBooks,
   addBookToCollection,
-  removeBookFromCollection,
   createCollection,
   deleteCollection,
+  getCollectionBooks,
+  getCollectionById,
+  listCollections,
+  removeBookFromCollection,
 } from "./db/collections.ts";
-import {
-  listLibraryBackups,
-  restoreLibraryFromBackup,
-} from "./db/backups.ts";
-import {
-  listAllAnnotations,
-  getAnnotationsByBookId,
-  getAnnotationById,
-  getHighlightsByColor,
-  searchHighlightedText,
-  searchNotes,
-  fullTextSearch,
-  recentAnnotations,
-} from "./db/annotations.ts";
-import {
-  updateAnnotationNote,
-  deleteAnnotation,
-} from "./db/annotation-mutations.ts";
-import { exportAnnotationsMarkdownForBook } from "./db/annotation-export.ts";
 import { closeAll, getAnnotationDb, getLibraryDb } from "./db/connection.ts";
 import {
   validateAnnotationSchema,
@@ -90,8 +86,12 @@ export function createServer(): McpServer {
 
   // --- Collection tools (read) ---
 
-  mcpTool(server, "list_collections", "List all collections in the Library.", {}, () =>
-    listCollections(),
+  mcpTool(
+    server,
+    "list_collections",
+    "List all collections in the Library.",
+    {},
+    () => listCollections(),
   );
 
   mcpTool(
@@ -270,13 +270,8 @@ export function createServer(): McpServer {
       book_id: IdSchema.describe("Book ID (asset ID or numeric PK)"),
       collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)"),
     },
-    ({
-      book_id,
-      collection_id,
-    }: {
-      book_id: string;
-      collection_id: string;
-    }) => addBookToCollection(book_id, collection_id),
+    ({ book_id, collection_id }: { book_id: string; collection_id: string }) =>
+      addBookToCollection(book_id, collection_id),
   );
 
   mcpTool(
@@ -287,13 +282,8 @@ export function createServer(): McpServer {
       book_id: IdSchema.describe("Book ID (asset ID or numeric PK)"),
       collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)"),
     },
-    ({
-      book_id,
-      collection_id,
-    }: {
-      book_id: string;
-      collection_id: string;
-    }) => removeBookFromCollection(book_id, collection_id),
+    ({ book_id, collection_id }: { book_id: string; collection_id: string }) =>
+      removeBookFromCollection(book_id, collection_id),
   );
 
   mcpTool(

@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { describe, expect, test } from "bun:test";
 import { escapeLikePattern } from "../src/db/query.ts";
 
 /**
@@ -31,10 +31,9 @@ describe("LIKE pattern escaping", () => {
     const db = setup();
     const pattern = `%${escapeLikePattern("100%")}%`;
     const rows = db
-      .query<
-        { col: string },
-        [string]
-      >("SELECT * FROM test WHERE col LIKE ? ESCAPE '\\'")
+      .query<{ col: string }, [string]>(
+        "SELECT * FROM test WHERE col LIKE ? ESCAPE '\\'",
+      )
       .all(pattern);
     expect(rows).toEqual([{ col: "100%" }]);
   });

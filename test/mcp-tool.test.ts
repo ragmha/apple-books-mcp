@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { runTool } from "../src/mcp-tool.ts";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MutationError } from "../src/db/library-mutation.ts";
+import { runTool } from "../src/mcp-tool.ts";
 
 describe("runTool wrapper", () => {
   test("wraps a successful result in MCP text content with pretty JSON", async () => {
@@ -10,19 +10,18 @@ describe("runTool wrapper", () => {
       { x: 21 },
     );
     expect(result).toEqual({
-      content: [{ type: "text", text: JSON.stringify({ doubled: 42 }, null, 2) }],
+      content: [
+        { type: "text", text: JSON.stringify({ doubled: 42 }, null, 2) },
+      ],
     });
   });
 
   test("translates MutationError into McpError InvalidParams with the verbatim message", async () => {
     let thrown: unknown;
     try {
-      await runTool(
-        () => {
-          throw new MutationError("Book not found: abc");
-        },
-        {},
-      );
+      await runTool(() => {
+        throw new MutationError("Book not found: abc");
+      }, {});
     } catch (e) {
       thrown = e;
     }
@@ -35,12 +34,9 @@ describe("runTool wrapper", () => {
   test("translates any other thrown error into McpError InternalError WITHOUT leaking the original message (PII guard)", async () => {
     let thrown: unknown;
     try {
-      await runTool(
-        () => {
-          throw new TypeError("constraint failed on title='User Private Note'");
-        },
-        {},
-      );
+      await runTool(() => {
+        throw new TypeError("constraint failed on title='User Private Note'");
+      }, {});
     } catch (e) {
       thrown = e;
     }
@@ -65,6 +61,6 @@ describe("runTool wrapper", () => {
 
   test("supports synchronous handlers", async () => {
     const result = await runTool((_args: object) => 7, {});
-    expect(result.content[0]!.text).toBe("7");
+    expect(result.content).toEqual([{ type: "text", text: "7" }]);
   });
 });

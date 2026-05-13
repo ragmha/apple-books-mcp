@@ -7,10 +7,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import {
-  getLibraryDbPath,
-  getWritableLibraryDb,
-} from "./connection.ts";
+import { getLibraryDbPath, getWritableLibraryDb } from "./connection.ts";
 import type { BackupInfo, LibraryStore } from "./library-mutation.ts";
 
 const MAX_BACKUPS = 5;
@@ -119,10 +116,14 @@ export const filesystemLibraryStore: LibraryStore = {
     // traversal.
     const resolved = resolve(handle);
     if (dirname(resolved) !== expectedDir) {
-      throw new Error("restoreFromBackup: handle is outside the backups directory");
+      throw new Error(
+        "restoreFromBackup: handle is outside the backups directory",
+      );
     }
     if (!basename(resolved).startsWith(expectedPrefix)) {
-      throw new Error("restoreFromBackup: handle does not look like a Library backup");
+      throw new Error(
+        "restoreFromBackup: handle does not look like a Library backup",
+      );
     }
     if (!existsSync(resolved)) {
       throw new Error("restoreFromBackup: backup file not found");

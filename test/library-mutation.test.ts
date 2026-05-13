@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { EntityTypes, Tables } from "../src/db/constants.ts";
 import {
   createLibraryMutation,
   MutationError,
 } from "../src/db/library-mutation.ts";
-import { Tables, EntityTypes } from "../src/db/constants.ts";
-import { createSeededDb } from "./helpers/seed.ts";
 import { FakeBooksAppPort, FakeLibraryStore } from "./helpers/fakes.ts";
+import { createSeededDb } from "./helpers/seed.ts";
 
 describe("LibraryMutation.mutate", () => {
   test("invokes the callback inside a transaction and returns success", async () => {
@@ -209,9 +209,7 @@ describe("LibraryMutation system-error paths", () => {
     expect(result.data).toBe("ok");
 
     // The row must be on disk.
-    const rows = db
-      .query(`SELECT ZTITLE FROM ${Tables.Collections}`)
-      .all();
+    const rows = db.query(`SELECT ZTITLE FROM ${Tables.Collections}`).all();
     expect(rows).toEqual([{ ZTITLE: "Persisted" }]);
   });
 
@@ -310,9 +308,7 @@ describe("LibraryTx (Core Data row helpers)", () => {
           ZTITLE: string;
         },
         []
-      >(
-        `SELECT Z_ENT, Z_OPT, ZLOCALMODDATE, ZTITLE FROM ${Tables.Collections}`,
-      )
+      >(`SELECT Z_ENT, Z_OPT, ZLOCALMODDATE, ZTITLE FROM ${Tables.Collections}`)
       .get();
 
     expect(row?.Z_ENT).toBe(EntityTypes.Collection);
@@ -335,11 +331,15 @@ describe("LibraryTx (Core Data row helpers)", () => {
         ZLASTMODIFICATION: 0,
       });
       // Force a small gap so the new mtime is observably different.
-      const insertedMtime = db
+      const insertedRow = db
         .query<{ ZLOCALMODDATE: number }, [number]>(
           `SELECT ZLOCALMODDATE FROM ${Tables.Collections} WHERE Z_PK = ?`,
         )
-        .get(pk)!.ZLOCALMODDATE;
+        .get(pk);
+      if (!insertedRow) {
+        throw new Error("Expected inserted collection row");
+      }
+      const insertedMtime = insertedRow.ZLOCALMODDATE;
 
       tx.update(Tables.Collections, pk, { ZTITLE: "Renamed" });
       return { pk, insertedMtime };
@@ -359,7 +359,9 @@ describe("LibraryTx (Core Data row helpers)", () => {
 
     expect(row?.Z_OPT).toBe(2);
     expect(row?.ZTITLE).toBe("Renamed");
-    expect(row?.ZLOCALMODDATE).toBeGreaterThanOrEqual(result.data.insertedMtime);
+    expect(row?.ZLOCALMODDATE).toBeGreaterThanOrEqual(
+      result.data.insertedMtime,
+    );
   });
 
   test("softDelete sets ZDELETEDFLAG=1, refreshes both mtimes, bumps Z_OPT", async () => {

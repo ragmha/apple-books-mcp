@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
-import { readdirSync, existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { Paths, DbPrefixes } from "./constants.ts";
+import { DbPrefixes, Paths } from "./constants.ts";
 
 function findSqliteFile(dir: string, prefix: string): string {
   if (!existsSync(dir)) {
@@ -15,7 +15,13 @@ function findSqliteFile(dir: string, prefix: string): string {
       `No SQLite database found in ${dir} with prefix "${prefix}"`,
     );
   }
-  return join(dir, files[0]!);
+  const [file] = files;
+  if (file === undefined) {
+    throw new Error(
+      `No SQLite database found in ${dir} with prefix "${prefix}"`,
+    );
+  }
+  return join(dir, file);
 }
 
 let libraryDb: Database | null = null;

@@ -1,18 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
-  createLibraryMutation,
-  MutationError,
-} from "../src/db/library-mutation.ts";
-import {
-  updateAnnotationNoteTx,
   deleteAnnotationTx,
+  updateAnnotationNoteTx,
 } from "../src/db/annotation-mutations.ts";
 import { Tables } from "../src/db/constants.ts";
 import {
-  createSeededAnnotationDb,
-  seedAnnotation,
-} from "./helpers/seed.ts";
+  createLibraryMutation,
+  MutationError,
+} from "../src/db/library-mutation.ts";
 import { FakeBooksAppPort, FakeLibraryStore } from "./helpers/fakes.ts";
+import { createSeededAnnotationDb, seedAnnotation } from "./helpers/seed.ts";
 
 describe("updateAnnotationNoteTx", () => {
   test("updates the note text on the annotation matched by UUID", () => {
@@ -28,19 +25,19 @@ describe("updateAnnotationNoteTx", () => {
       new FakeBooksAppPort(),
     );
 
-    return mutation.mutate((tx) =>
-      updateAnnotationNoteTx(tx, "ann-A", "new note"),
-    ).then((result) => {
-      expect(result.success).toBe(true);
-      const row = db
-        .query<{ ZANNOTATIONNOTE: string; Z_OPT: number }, []>(
-          `SELECT ZANNOTATIONNOTE, Z_OPT FROM ${Tables.Annotations} WHERE Z_PK = 1`,
-        )
-        .get();
-      expect(row?.ZANNOTATIONNOTE).toBe("new note");
-      // Z_OPT must be bumped — Apple Books treats unchanged Z_OPT as no-op.
-      expect(row?.Z_OPT).toBe(2);
-    });
+    return mutation
+      .mutate((tx) => updateAnnotationNoteTx(tx, "ann-A", "new note"))
+      .then((result) => {
+        expect(result.success).toBe(true);
+        const row = db
+          .query<{ ZANNOTATIONNOTE: string; Z_OPT: number }, []>(
+            `SELECT ZANNOTATIONNOTE, Z_OPT FROM ${Tables.Annotations} WHERE Z_PK = 1`,
+          )
+          .get();
+        expect(row?.ZANNOTATIONNOTE).toBe("new note");
+        // Z_OPT must be bumped — Apple Books treats unchanged Z_OPT as no-op.
+        expect(row?.Z_OPT).toBe(2);
+      });
   });
 
   test("updates by numeric Z_PK as a fallback", async () => {

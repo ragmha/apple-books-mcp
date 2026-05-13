@@ -27,7 +27,11 @@ export interface LibraryTx {
    * Caller provides domain columns only; the Core Data discipline columns
    * are managed by this method and must not appear in `columns`.
    */
-  insert(table: string, entity: number, columns: Record<string, unknown>): number;
+  insert(
+    table: string,
+    entity: number,
+    columns: Record<string, unknown>,
+  ): number;
 
   /**
    * Update a row by Z_PK. Increments Z_OPT, refreshes ZLOCALMODDATE, and
@@ -315,7 +319,8 @@ export function createLibraryMutation(
           return {
             success: true,
             data: undefined as never,
-            message: "Mutation applied successfully (with post-commit warning).",
+            message:
+              "Mutation applied successfully (with post-commit warning).",
             backupPath,
           };
         }

@@ -1,0 +1,73 @@
+name: Bug report
+description: Report a reproducible problem with apple-books-mcp
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please do not include private book titles,
+        notes, highlighted text, or full database paths unless you are certain
+        they are safe to share.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Minimal steps to reproduce the issue.
+      placeholder: |
+        1. Configure MCP client with ...
+        2. Run tool ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: Output of `sw_vers`
+      placeholder: "ProductVersion: 15.x"
+    validations:
+      required: true
+  - type: input
+    id: bun
+    attributes:
+      label: Bun version
+      description: Output of `bun --version`
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: apple-books-mcp version or commit
+      placeholder: "v0.1.0 or commit SHA"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I granted Full Disk Access to the app that launches this server.
+          required: true
+        - label: I removed or redacted private book/note/highlight content.
+          required: true
+

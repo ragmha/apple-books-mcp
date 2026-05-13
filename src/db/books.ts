@@ -1,12 +1,12 @@
 import { getLibraryDb } from "./connection.ts";
+import { Tables } from "./constants.ts";
 import { createDb } from "./query.ts";
 import {
-  BookSchema,
-  BookSummarySchema,
   type Book,
+  BookSchema,
   type BookSummary,
+  BookSummarySchema,
 } from "./schemas.ts";
-import { Tables } from "./constants.ts";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -66,7 +66,7 @@ export function getBookById(bookId: string): Book | null {
 
   if (!book) {
     const numId = parseInt(bookId, 10);
-    if (!isNaN(numId)) {
+    if (!Number.isNaN(numId)) {
       book = db
         .selectFrom(Tables.Books, BookSchema)
         .selectAll()

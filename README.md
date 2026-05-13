@@ -1,5 +1,10 @@
 # Apple Books MCP Server
 
+[![CI](https://github.com/ragmha/apple-books-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ragmha/apple-books-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Bun](https://img.shields.io/badge/runtime-Bun%20%E2%89%A5%201.0-black)](https://bun.sh)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)](#requirements)
+
 A Bun/TypeScript [Model Context Protocol](https://modelcontextprotocol.io)
 server that lets an AI client (Claude Desktop, Cursor, Copilot CLI, …) read
 and write your local Apple Books library, collections, and annotations.
@@ -147,8 +152,8 @@ All list/search tools accept `limit` (default 50, max 100) and `offset`.
 
 | Tool | Purpose |
 |---|---|
-| `add_book_to_collection` | |
-| `remove_book_from_collection` | |
+| `add_book_to_collection` | Add an existing book to a collection |
+| `remove_book_from_collection` | Remove a book from a collection |
 | `create_collection` | Returns the new `collectionId` (UUID) |
 | `delete_collection` | Soft delete (`ZDELETEDFLAG = 1`) |
 | `update_annotation_note` | Rewrite the note text on a highlight |
@@ -214,8 +219,9 @@ errors can include user PII (book titles, note text).
 
 ```bash
 bun install
+bun run check       # Biome format/lint/import organization
 bun run typecheck   # tsc --noEmit
-bun test            # 47 tests, in-memory SQLite + fake adapters
+bun test            # 72 tests, in-memory SQLite + fake adapters
 bun run dev         # watch-mode start
 ```
 
@@ -223,7 +229,23 @@ The architecture lives in [`CONTEXT.md`](./CONTEXT.md), including an ASCII
 diagram of the read rail, write rail, and the production-vs-test fork at
 the port adapters.
 
+## Contributing
+
+Pull requests welcome. Please read [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+for the dev loop, commit style, and how the test fixtures work.
+
+## Security
+
+Found a security issue? Please **don't** open a public issue — see
+[`SECURITY.md`](./SECURITY.md) for how to report privately.
+
 ## License
 
-MIT
+MIT — see [`LICENSE`](./LICENSE).
 
+---
+
+**Trademark notice.** "Apple", "Apple Books", and "iBooks" are trademarks
+of Apple Inc., registered in the U.S. and other countries. This project is
+an independent, unofficial tool and is **not affiliated with, endorsed by,
+or sponsored by Apple Inc.** in any way.

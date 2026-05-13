@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { deleteCollectionTx } from "../src/db/collections.ts";
-import { createLibraryMutation } from "../src/db/library-mutation.ts";
 import { Tables } from "../src/db/constants.ts";
-import { createSeededDb, seedCollection } from "./helpers/seed.ts";
+import { createLibraryMutation } from "../src/db/library-mutation.ts";
 import { FakeBooksAppPort, FakeLibraryStore } from "./helpers/fakes.ts";
+import { createSeededDb, seedCollection } from "./helpers/seed.ts";
 
 describe("deleteCollection integration", () => {
   test("soft-deletes by setting ZDELETEDFLAG=1 and bumps Z_OPT (this is the bug the security review caught)", async () => {
@@ -30,7 +30,10 @@ describe("deleteCollection integration", () => {
       >(
         `SELECT ZDELETEDFLAG, Z_OPT, ZLASTMODIFICATION, ZLOCALMODDATE FROM ${Tables.Collections}`,
       )
-      .get()!;
+      .get();
+    if (!row) {
+      throw new Error("Expected deleted collection row");
+    }
 
     expect(row.ZDELETEDFLAG).toBe(1);
     // Z_OPT must be incremented — the original code forgot this.

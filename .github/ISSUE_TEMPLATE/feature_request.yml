@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest an improvement or new MCP tool
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed solution
+      description: What should the MCP tool or behavior look like?
+    validations:
+      required: true
+  - type: dropdown
+    id: data_safety
+    attributes:
+      label: Does this write to Apple Books data?
+      options:
+        - "No, read-only"
+        - "Yes, writes to Library DB"
+        - "Yes, writes to Annotations DB"
+        - "Unsure"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+

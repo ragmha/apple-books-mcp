@@ -6,9 +6,7 @@ import { Tables } from "./constants.ts";
  * Returned (rather than thrown) so callers can decide whether to refuse
  * writes, log a warning, or fall back to read-only mode.
  */
-export type SchemaCheckResult =
-  | { ok: true }
-  | { ok: false; message: string };
+export type SchemaCheckResult = { ok: true } | { ok: false; message: string };
 
 /**
  * Minimum tables and columns the codebase relies on. If Apple's Core Data
@@ -64,10 +62,9 @@ function runSchemaCheck(
 ): SchemaCheckResult {
   const tables = new Set(
     db
-      .query<
-        { name: string },
-        []
-      >("SELECT name FROM sqlite_master WHERE type='table'")
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type='table'",
+      )
       .all()
       .map((r) => r.name),
   );

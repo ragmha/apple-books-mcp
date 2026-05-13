@@ -1,7 +1,7 @@
 import { getAnnotationDb } from "./connection.ts";
-import { createDb, escapeLikePattern } from "./query.ts";
-import { AnnotationSchema, type Annotation } from "./schemas.ts";
 import { Tables } from "./constants.ts";
+import { createDb, escapeLikePattern } from "./query.ts";
+import { type Annotation, AnnotationSchema } from "./schemas.ts";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -26,12 +26,16 @@ export function listAllAnnotations(
   const effectiveLimit = clampLimit(limit);
   const effectiveOffset = Math.max(offset ?? 0, 0);
 
-  const total = annDb
+  const totalRow = annDb
     .query<{ count: number }, []>(
       `SELECT COUNT(*) as count FROM ${Tables.Annotations}
        WHERE COALESCE(ZANNOTATIONDELETED, 0) = 0`,
     )
-    .get()!.count;
+    .get();
+  if (!totalRow) {
+    throw new Error("Failed to count annotations");
+  }
+  const total = totalRow.count;
 
   const annotations = db
     .selectFrom(Tables.Annotations, AnnotationSchema)
@@ -73,7 +77,7 @@ export function getAnnotationById(annotationId: string): Annotation | null {
 
   if (!annotation) {
     const numId = parseInt(annotationId, 10);
-    if (!isNaN(numId)) {
+    if (!Number.isNaN(numId)) {
       annotation = db
         .selectFrom(Tables.Annotations, AnnotationSchema)
         .selectAll()
@@ -113,12 +117,16 @@ export function getHighlightsByColor(
   const annDb = getAnnotationDb();
   const db = createDb(annDb);
 
-  const total = annDb
+  const totalRow = annDb
     .query<{ count: number }, [number]>(
       `SELECT COUNT(*) as count FROM ${Tables.Annotations}
        WHERE ZANNOTATIONSTYLE = ? AND COALESCE(ZANNOTATIONDELETED, 0) = 0`,
     )
-    .get(styleNum)!.count;
+    .get(styleNum);
+  if (!totalRow) {
+    throw new Error("Failed to count annotations by color");
+  }
+  const total = totalRow.count;
 
   const annotations = db
     .selectFrom(Tables.Annotations, AnnotationSchema)
@@ -169,7 +177,11 @@ export function fullTextSearch(text: string): Annotation[] {
     .selectAll()
     .whereRaw(
       "(ZANNOTATIONSELECTEDTEXT LIKE ? ESCAPE '\\' OR ZANNOTATIONNOTE LIKE ? ESCAPE '\\' OR ZANNOTATIONREPRESENTATIVETEXT LIKE ? ESCAPE '\\')",
-      [`%${escapeLikePattern(text)}%`, `%${escapeLikePattern(text)}%`, `%${escapeLikePattern(text)}%`],
+      [
+        `%${escapeLikePattern(text)}%`,
+        `%${escapeLikePattern(text)}%`,
+        `%${escapeLikePattern(text)}%`,
+      ],
     )
     .whereRaw("COALESCE(ZANNOTATIONDELETED, 0) = 0")
     .orderBy("ZANNOTATIONMODIFICATIONDATE", "DESC")

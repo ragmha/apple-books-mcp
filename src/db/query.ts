@@ -1,5 +1,5 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
-import { z } from "zod";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
+import type { z } from "zod";
 
 /** Escape LIKE pattern special characters */
 export function escapeLikePattern(input: string): string {
@@ -167,7 +167,7 @@ export class QueryBuilder<T extends z.ZodType> {
 
     // Joins
     if (this.joinClauses.length > 0) {
-      sql += " " + this.joinClauses.join(" ");
+      sql += ` ${this.joinClauses.join(" ")}`;
     }
 
     // Where
@@ -190,13 +190,13 @@ export class QueryBuilder<T extends z.ZodType> {
         }
         return i === 0 ? condition : `${w.connector} ${condition}`;
       });
-      sql += " WHERE " + conditions.join(" ");
+      sql += ` WHERE ${conditions.join(" ")}`;
     }
 
     // Order
     if (this.orderClauses.length > 0) {
       const orders = this.orderClauses.map((o) => `${o.column} ${o.direction}`);
-      sql += " ORDER BY " + orders.join(", ");
+      sql += ` ORDER BY ${orders.join(", ")}`;
     }
 
     // Limit & Offset — bound as parameters, never interpolated. The

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { createCollectionTx } from "../src/db/collections.ts";
-import { createLibraryMutation } from "../src/db/library-mutation.ts";
 import { Tables } from "../src/db/constants.ts";
-import { createSeededDb } from "./helpers/seed.ts";
+import { createLibraryMutation } from "../src/db/library-mutation.ts";
 import { FakeBooksAppPort, FakeLibraryStore } from "./helpers/fakes.ts";
+import { createSeededDb } from "./helpers/seed.ts";
 
 describe("createCollection integration", () => {
   test("creates a new collection with a fresh UUID and Z_OPT=1", async () => {
@@ -36,7 +36,10 @@ describe("createCollection integration", () => {
       >(
         `SELECT Z_PK, Z_OPT, Z_ENT, ZTITLE, ZCOLLECTIONID, ZDELETEDFLAG FROM ${Tables.Collections}`,
       )
-      .get()!;
+      .get();
+    if (!row) {
+      throw new Error("Expected created collection");
+    }
 
     expect(row.Z_OPT).toBe(1);
     expect(row.Z_ENT).toBe(2);

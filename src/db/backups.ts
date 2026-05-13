@@ -1,5 +1,5 @@
-import { productionMutation } from "./library-mutation-singleton.ts";
 import type { BackupInfo } from "./library-mutation.ts";
+import { productionMutation } from "./library-mutation-singleton.ts";
 
 /**
  * Public read-side helper: enumerate the snapshots LibraryMutation has
@@ -21,9 +21,7 @@ export function listLibraryBackups(): BackupInfo[] {
  * success and failure-after-snapshot paths so users always know how to
  * recover.
  */
-export async function restoreLibraryFromBackup(
-  handle: string,
-): Promise<{
+export async function restoreLibraryFromBackup(handle: string): Promise<{
   success: boolean;
   message: string;
   restoredFrom?: string;

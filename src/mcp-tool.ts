@@ -1,5 +1,8 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import type {
+  McpServer,
+  ToolCallback,
+} from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { ZodRawShape } from "zod";
 import { MutationError } from "./db/library-mutation.ts";
 
@@ -41,16 +44,13 @@ export async function runTool<A, R>(
 }
 
 /**
- * Sugar over `server.tool` that routes through `runTool`. Drop-in
- * replacement for the existing `server.tool(name, description, schema, fn)`
- * pattern, except `fn` returns the raw domain object — the wrapper handles
- * MCP serialisation and McpError translation.
+ * Sugar over `server.registerTool` that routes through `runTool`. The handler
+ * returns the raw domain object — the wrapper handles MCP serialisation and
+ * McpError translation.
  *
- * The SDK's `tool` method has six overloads which TS cannot disambiguate
- * when our wrapped callback returns `McpContent`; the bridge cast on the
- * inner callback is the necessary indirection. Schema-driven argument
- * validation happens in the SDK before our handler runs, so the runtime
- * types are sound even though TS can't see it from the cast site.
+ * The SDK's schema-driven argument validation happens before our handler runs,
+ * so the callback bridge is sound even though the generic domain handler type
+ * is intentionally independent of SDK-specific schema inference.
  */
 export function mcpTool<S extends ZodRawShape, A, R>(
   server: McpServer,
@@ -59,7 +59,6 @@ export function mcpTool<S extends ZodRawShape, A, R>(
   schema: S,
   handler: (args: A) => Promise<R> | R,
 ): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tool = server.tool.bind(server) as any;
-  tool(name, description, schema, (args: A) => runTool(handler, args));
+  const callback = ((args: A) => runTool(handler, args)) as ToolCallback<S>;
+  server.registerTool(name, { description, inputSchema: schema }, callback);
 }
