@@ -4,7 +4,9 @@ node_modules
 # output
 out
 dist
+demo/out
 *.tgz
+demo/**/*.mp4
 
 # code coverage
 coverage
