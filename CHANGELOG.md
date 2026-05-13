@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 This project follows semantic versioning while the public MCP tool surface is
 still pre-1.0.
 
+## Unreleased
+
+### Added
+
+- GitHub Actions workflow for npm publishing with OIDC provenance.
+
 ## [0.1.1] - 2026-05-13
 
 ### Changed
