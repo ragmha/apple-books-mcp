@@ -11,6 +11,10 @@ still pre-1.0.
 
 - GitHub Actions workflow for npm publishing with OIDC provenance.
 
+### Changed
+
+- Updated GitHub Actions workflows to Node 24-compatible action majors.
+
 ## [0.1.1] - 2026-05-13
 
 ### Changed
