@@ -54,3 +54,18 @@ PRs should explain:
 - Why it is safe for user data.
 - What tests were added or updated.
 - Whether docs changed.
+
+## Release / npm publishing
+
+Releases are published through `.github/workflows/publish.yml` so npm can
+attach provenance using GitHub Actions OIDC.
+
+Before the first npm publish, configure npm trusted publishing for:
+
+- Package: `@ragmha/apple-books-mcp`
+- Owner/repository: `ragmha/apple-books-mcp`
+- Workflow: `publish.yml`
+
+Then create a GitHub release from a `v*` tag, or manually run the publish
+workflow with the tag to publish. The workflow re-runs `bun run check`,
+`bun run typecheck`, and `bun test` before `npm publish --provenance`.
