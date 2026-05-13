@@ -45,6 +45,8 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun run --watch src/index.ts",
+    "demo:preview": "remotion studio demo/remotion/index.ts",
+    "demo:render": "remotion render demo/remotion/index.ts AppleBooksMcpDemo demo/out/apple-books-mcp-demo.mp4",
     "format": "biome format --write .",
     "format:check": "biome format --check .",
     "lint": "biome lint .",
@@ -54,7 +56,13 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
-    "@types/bun": "latest"
+    "@remotion/cli": "^4.0.460",
+    "@types/bun": "latest",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "remotion": "^4.0.460"
   },
   "peerDependencies": {
     "typescript": "^5"

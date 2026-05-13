@@ -11,6 +11,8 @@ still pre-1.0.
 
 - GitHub Actions workflow for npm publishing with OIDC provenance.
 - `.nvmrc` to pin the Node/npm publishing toolchain.
+- Remotion demo source with sanitized read/write walkthrough, transcript, and
+  reusable MCP client prompts.
 
 ### Changed
 

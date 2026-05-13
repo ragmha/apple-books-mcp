@@ -106,6 +106,22 @@ Add to `.vscode/mcp.json`:
 copilot mcp add apple-books bunx @ragmha/apple-books-mcp
 ```
 
+## Demo
+
+The repository includes a scripted Remotion demo that uses sanitized sample
+books, highlights, and notes. It shows the read flow (`list_books`,
+`search_highlighted_text`, `export_annotations_markdown`) and the write flow
+(`create_collection`, collection membership changes, annotation updates/deletes,
+backups, and restore) without touching a real Apple Books library.
+
+```bash
+bun run demo:preview  # open Remotion studio
+bun run demo:render   # render demo/out/apple-books-mcp-demo.mp4
+```
+
+See [`demo/`](./demo/) for the source, transcript, and client-agnostic prompts.
+Generated videos are ignored by git and are not included in the npm package.
+
 ## Tools
 
 All list/search tools accept `limit` (default 50, max 100) and `offset`.

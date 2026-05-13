@@ -27,6 +27,21 @@ your real Apple Books library.
 4. Update `README.md` and `CONTEXT.md` when changing the public MCP surface
    or architecture.
 
+## Demo development
+
+The Remotion demo under `demo/` is repository documentation, not package
+payload. It must use sanitized fake data only; do not record or commit real
+Apple Books libraries, book contents, highlights, notes, screenshots, or
+database files.
+
+```bash
+bun run demo:preview
+bun run demo:render
+```
+
+Rendered videos go to `demo/out/`, which is ignored by git and excluded from
+the npm package.
+
 ## Safety rules
 
 - Do not write directly to Apple Books SQLite files outside a mutation seam.
