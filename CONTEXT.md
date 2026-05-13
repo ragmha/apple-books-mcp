@@ -8,9 +8,11 @@ terms here as the design crystallises — sharpen fuzzy ones in place.
 - **Library** — the writable `BKLibrary*.sqlite` Core Data store under
   `~/Library/Containers/com.apple.iBooksX/...`. Owns books, collections, and
   the join table between them.
-- **Annotations DB** — the separate, read-only `AEAnnotation*.sqlite` Core
-  Data store. Owns highlights, notes, and bookmarks. Joined to the Library by
-  `ZASSETID` (string), not by `Z_PK`.
+- **Annotations DB** — the separate `AEAnnotation*.sqlite` Core Data store.
+  Owns highlights, notes, and bookmarks. Joined to the Library by
+  `ZASSETID` (string), not by `Z_PK`. Reads go through the same query
+  path as the Library; writes (note edits, soft-deletes) go through a
+  parallel `LibraryMutation` instance backed by the AEAnnotation file.
 - **Asset / Book** — a book row in the Library (`ZBKLIBRARYASSET`). The
   natural identifier is `ZASSETID` (string); the internal one is `Z_PK`.
 - **Collection** — a user-curated grouping of Assets (`ZBKCOLLECTION`).
@@ -119,8 +121,9 @@ sync failure.
         │ AEAnnotation │        │ ~/Library/Containers/           │
         │ *.sqlite     │        │   com.apple.iBooksX/Data/       │
         │ (Annotations │        │   Documents/BKLibrary/          │
-        │  DB,         │        │   BKLibrary*.sqlite (Library)   │
-        │  read-only)  │        │   + .backup-<timestamp> files   │
+        │  DB —        │        │   BKLibrary*.sqlite (Library)   │
+        │  read +      │        │   + .backup-<timestamp> files   │
+        │  write)      │        │                                 │
         └──────────────┘        └─────────────────────────────────┘
 ```
 

@@ -21,6 +21,7 @@ function findSqliteFile(dir: string, prefix: string): string {
 let libraryDb: Database | null = null;
 let libraryDbReadonly: boolean | null = null;
 let annotationDb: Database | null = null;
+let annotationDbReadonly: boolean | null = null;
 
 export function getLibraryDb(readonly = true): Database {
   if (libraryDb && libraryDbReadonly === readonly) return libraryDb;
@@ -37,16 +38,29 @@ export function getLibraryDb(readonly = true): Database {
   return libraryDb;
 }
 
-export function getAnnotationDb(): Database {
-  if (annotationDb) return annotationDb;
+export function getAnnotationDb(readonly = true): Database {
+  if (annotationDb && annotationDbReadonly === readonly) return annotationDb;
+  if (annotationDb) {
+    annotationDb.close();
+    annotationDb = null;
+  }
   const dbPath = findSqliteFile(Paths.annotationDir, DbPrefixes.annotation);
-  annotationDb = new Database(dbPath, { readonly: true });
+  annotationDb = new Database(dbPath, { readonly });
+  annotationDbReadonly = readonly;
+  if (!readonly) {
+    annotationDb.run("PRAGMA journal_mode=WAL");
+  }
   return annotationDb;
 }
 
 /** Reopen library DB with write access for mutation operations */
 export function getWritableLibraryDb(): Database {
   return getLibraryDb(false);
+}
+
+/** Reopen annotation DB with write access for mutation operations */
+export function getWritableAnnotationDb(): Database {
+  return getAnnotationDb(false);
 }
 
 export function closeAll(): void {
@@ -58,10 +72,16 @@ export function closeAll(): void {
   if (annotationDb) {
     annotationDb.close();
     annotationDb = null;
+    annotationDbReadonly = null;
   }
 }
 
 /** Get the path to the BKLibrary SQLite file (for backup purposes) */
 export function getLibraryDbPath(): string {
   return findSqliteFile(Paths.libraryDir, DbPrefixes.library);
+}
+
+/** Get the path to the AEAnnotation SQLite file (for backup purposes) */
+export function getAnnotationDbPath(): string {
+  return findSqliteFile(Paths.annotationDir, DbPrefixes.annotation);
 }

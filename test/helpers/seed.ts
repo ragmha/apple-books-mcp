@@ -100,3 +100,73 @@ export function seedCollection(
     [opts.pk, opts.pk, opts.uuid, opts.title],
   );
 }
+
+/**
+ * Build a fresh in-memory SQLite seeded with the Apple Books AEAnnotation
+ * schema needed for annotation-mutation tests. The annotation DB is a
+ * separate Core Data store from the Library DB; we only need the
+ * `ZAEANNOTATION` table for our updates.
+ */
+export function createSeededAnnotationDb(): Database {
+  const db = new Database(":memory:");
+  db.run(`
+    CREATE TABLE Z_PRIMARYKEY (
+      Z_ENT INTEGER PRIMARY KEY,
+      Z_NAME TEXT,
+      Z_SUPER INTEGER,
+      Z_MAX INTEGER
+    )
+  `);
+  db.run(`
+    CREATE TABLE ${Tables.Annotations} (
+      Z_PK INTEGER PRIMARY KEY,
+      Z_ENT INTEGER,
+      Z_OPT INTEGER,
+      ZANNOTATIONUUID TEXT,
+      ZANNOTATIONASSETID TEXT,
+      ZANNOTATIONSELECTEDTEXT TEXT,
+      ZANNOTATIONNOTE TEXT,
+      ZANNOTATIONREPRESENTATIVETEXT TEXT,
+      ZANNOTATIONSTYLE INTEGER,
+      ZANNOTATIONTYPE INTEGER,
+      ZANNOTATIONLOCATION TEXT,
+      ZANNOTATIONCREATIONDATE REAL,
+      ZANNOTATIONMODIFICATIONDATE REAL,
+      ZANNOTATIONDELETED INTEGER,
+      ZANNOTATIONISUNDERLINE INTEGER
+    )
+  `);
+  return db;
+}
+
+/** Convenience: insert an Annotation row directly. */
+export function seedAnnotation(
+  db: Database,
+  opts: {
+    pk: number;
+    uuid: string;
+    assetId: string;
+    selectedText?: string;
+    note?: string;
+    style?: number;
+    deleted?: boolean;
+  },
+): void {
+  db.run(
+    `INSERT INTO ${Tables.Annotations}
+     (Z_PK, Z_ENT, Z_OPT, ZANNOTATIONUUID, ZANNOTATIONASSETID,
+      ZANNOTATIONSELECTEDTEXT, ZANNOTATIONNOTE, ZANNOTATIONSTYLE,
+      ZANNOTATIONTYPE, ZANNOTATIONDELETED,
+      ZANNOTATIONCREATIONDATE, ZANNOTATIONMODIFICATIONDATE)
+     VALUES (?, 1, 1, ?, ?, ?, ?, ?, 0, ?, 0, 0)`,
+    [
+      opts.pk,
+      opts.uuid,
+      opts.assetId,
+      opts.selectedText ?? "",
+      opts.note ?? "",
+      opts.style ?? 1,
+      opts.deleted ? 1 : 0,
+    ],
+  );
+}

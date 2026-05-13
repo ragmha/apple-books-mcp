@@ -34,7 +34,34 @@ const REQUIRED: Array<{ table: string; columns: string[] }> = [
   { table: "Z_PRIMARYKEY", columns: ["Z_ENT", "Z_NAME", "Z_MAX"] },
 ];
 
+const REQUIRED_ANNOTATIONS: Array<{ table: string; columns: string[] }> = [
+  {
+    table: Tables.Annotations,
+    columns: [
+      "Z_PK",
+      "Z_OPT",
+      "ZANNOTATIONUUID",
+      "ZANNOTATIONASSETID",
+      "ZANNOTATIONNOTE",
+      "ZANNOTATIONDELETED",
+      "ZANNOTATIONMODIFICATIONDATE",
+    ],
+  },
+];
+
 export function validateLibrarySchema(db: Database): SchemaCheckResult {
+  return runSchemaCheck(db, REQUIRED, "Apple Books library");
+}
+
+export function validateAnnotationSchema(db: Database): SchemaCheckResult {
+  return runSchemaCheck(db, REQUIRED_ANNOTATIONS, "Apple Books annotations");
+}
+
+function runSchemaCheck(
+  db: Database,
+  required: Array<{ table: string; columns: string[] }>,
+  label: string,
+): SchemaCheckResult {
   const tables = new Set(
     db
       .query<
@@ -47,7 +74,7 @@ export function validateLibrarySchema(db: Database): SchemaCheckResult {
 
   const problems: string[] = [];
 
-  for (const req of REQUIRED) {
+  for (const req of required) {
     if (!tables.has(req.table)) {
       problems.push(`missing table: ${req.table}`);
       continue;
@@ -69,7 +96,7 @@ export function validateLibrarySchema(db: Database): SchemaCheckResult {
   return {
     ok: false,
     message:
-      "Apple Books schema validation failed; the codebase expects Core Data " +
+      `${label} schema validation failed; the codebase expects Core Data ` +
       "tables/columns that are not present. This usually means a macOS " +
       "update changed the schema. Details: " +
       problems.join("; "),

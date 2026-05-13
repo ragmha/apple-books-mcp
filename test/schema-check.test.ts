@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { validateLibrarySchema } from "../src/db/schema-check.ts";
+import {
+  validateAnnotationSchema,
+  validateLibrarySchema,
+} from "../src/db/schema-check.ts";
 import { Tables } from "../src/db/constants.ts";
 
 describe("validateLibrarySchema", () => {
@@ -48,6 +51,45 @@ describe("validateLibrarySchema", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.message).toContain("ZASSETID");
+    }
+  });
+});
+
+describe("validateAnnotationSchema", () => {
+  test("returns ok for an Annotations DB with all expected columns", () => {
+    const db = new Database(":memory:");
+    db.run(`
+      CREATE TABLE ${Tables.Annotations} (
+        Z_PK INTEGER PRIMARY KEY,
+        Z_OPT INTEGER,
+        ZANNOTATIONUUID TEXT,
+        ZANNOTATIONASSETID TEXT,
+        ZANNOTATIONNOTE TEXT,
+        ZANNOTATIONDELETED INTEGER,
+        ZANNOTATIONMODIFICATIONDATE REAL
+      )
+    `);
+
+    expect(validateAnnotationSchema(db)).toEqual({ ok: true });
+  });
+
+  test("returns an error listing the missing column when ZANNOTATIONUUID is absent", () => {
+    const db = new Database(":memory:");
+    db.run(`
+      CREATE TABLE ${Tables.Annotations} (
+        Z_PK INTEGER PRIMARY KEY,
+        Z_OPT INTEGER,
+        ZANNOTATIONASSETID TEXT,
+        ZANNOTATIONNOTE TEXT,
+        ZANNOTATIONDELETED INTEGER,
+        ZANNOTATIONMODIFICATIONDATE REAL
+      )
+    `);
+
+    const result = validateAnnotationSchema(db);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("ZANNOTATIONUUID");
     }
   });
 });

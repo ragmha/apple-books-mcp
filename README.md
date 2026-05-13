@@ -134,14 +134,15 @@ All list/search tools accept `limit` (default 50, max 100) and `offset`.
 | `search_highlighted_text` | Search the highlighted-text field |
 | `search_notes` | Search the user-written note field |
 | `full_text_search` | Search highlight text, note, and representative text together |
+| `export_annotations_markdown` | Render annotations as Markdown — pass an `asset_id` for one book, omit for the whole library |
 
 ### Writes
 
-> Every write **snapshots the Library**, **verifies the snapshot's
-> integrity**, **quits Books.app *before* the change**, runs in a
-> `BEGIN IMMEDIATE` transaction with full Core Data discipline (`Z_OPT`
-> bumped, mtimes refreshed, parent-collection mtime refreshed for iCloud
-> sync), and **relaunches Books.app on success**. See
+> Every write **snapshots the relevant database** (Library or Annotations),
+> **verifies the snapshot's integrity**, **quits Books.app *before* the
+> change**, runs in a `BEGIN IMMEDIATE` transaction with full Core Data
+> discipline (`Z_OPT` bumped, mtimes refreshed, parent-collection mtime
+> refreshed for iCloud sync), and **relaunches Books.app on success**. See
 > [`CONTEXT.md`](./CONTEXT.md) for the architecture.
 
 | Tool | Purpose |
@@ -150,30 +151,40 @@ All list/search tools accept `limit` (default 50, max 100) and `offset`.
 | `remove_book_from_collection` | |
 | `create_collection` | Returns the new `collectionId` (UUID) |
 | `delete_collection` | Soft delete (`ZDELETEDFLAG = 1`) |
+| `update_annotation_note` | Rewrite the note text on a highlight |
+| `delete_annotation` | Soft-delete an annotation (`ZANNOTATIONDELETED = 1`) |
 | `list_backups` | Enumerate previously-taken Library snapshots, newest first |
 | `restore_backup` | Roll the Library back to a chosen snapshot (with the same safety ceremony as a write) |
 
 ## Backups & restore
 
-Every write produces a snapshot file alongside the Library, named
-`BKLibrary-1-091020011688.sqlite.backup-<timestamp>`, in
-`~/Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary/`. The
-five most recent backups are kept; older ones are pruned.
+Every write produces a snapshot file alongside the database it touched:
+Library writes snapshot
+`~/Library/Containers/com.apple.iBooksX/Data/Documents/BKLibrary/BKLibrary*.sqlite`
+to a `BKLibrary*.sqlite.backup-<timestamp>` sibling; annotation writes do
+the equivalent in
+`~/Library/Containers/com.apple.iBooksX/Data/Documents/AEAnnotation/`.
+The five most recent backups per database are kept; older ones are pruned.
 
-To roll back, ask your MCP client to run `list_backups` (returns
-`{handle, createdAt, sizeBytes}` newest-first), then call
+To roll back the **Library**, ask your MCP client to run `list_backups`
+(returns `{handle, createdAt, sizeBytes}` newest-first), then call
 `restore_backup` with the chosen `handle`. The restore runs the same
 safety ceremony as a write: integrity-check the chosen backup → quit
 Books.app → take a **fresh pre-restore safety snapshot of the current
 Library** → swap the file → relaunch Books. The safety snapshot path is
 returned in the result so you can roll forward again if needed.
 
+To roll back **annotations**, the manual procedure below is currently the
+only option (a parameterised `restore_backup` for the Annotations DB is on
+the roadmap).
+
 If you'd rather restore by hand:
 
 1. **Quit Apple Books.**
-2. In the BKLibrary directory, find the `.backup-*` file you want.
-3. Copy it over the live `BKLibrary-*.sqlite` file (preserve the live
-   filename — the suffix matters).
+2. In the `BKLibrary` (or `AEAnnotation`) directory, find the `.backup-*`
+   file you want.
+3. Copy it over the live `.sqlite` file (preserve the live filename — the
+   suffix matters).
 4. Delete the `.sqlite-wal` and `.sqlite-shm` siblings if they exist.
 5. Reopen Apple Books.
 

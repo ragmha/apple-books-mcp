@@ -32,8 +32,16 @@ import {
   fullTextSearch,
   recentAnnotations,
 } from "./db/annotations.ts";
-import { closeAll, getLibraryDb } from "./db/connection.ts";
-import { validateLibrarySchema } from "./db/schema-check.ts";
+import {
+  updateAnnotationNote,
+  deleteAnnotation,
+} from "./db/annotation-mutations.ts";
+import { exportAnnotationsMarkdownForBook } from "./db/annotation-export.ts";
+import { closeAll, getAnnotationDb, getLibraryDb } from "./db/connection.ts";
+import {
+  validateAnnotationSchema,
+  validateLibrarySchema,
+} from "./db/schema-check.ts";
 import { mcpTool } from "./mcp-tool.ts";
 
 // Reusable Zod schemas with security constraints.
@@ -337,6 +345,52 @@ export function createServer(): McpServer {
     ({ handle }: { handle: string }) => restoreLibraryFromBackup(handle),
   );
 
+  // --- Annotation write tools ---
+  //
+  // Operate on the AEAnnotation Core Data store (separate file from the
+  // Library). Each routes through its own LibraryMutation instance with
+  // the same safety ceremony as Library writes.
+
+  mcpTool(
+    server,
+    "update_annotation_note",
+    "Update the note text on an annotation. Snapshots the Annotations DB and restarts Books.app.",
+    {
+      annotation_id: IdSchema.describe("Annotation UUID or numeric PK"),
+      note: z
+        .string()
+        .min(1)
+        .max(10_000)
+        .describe("New note text (must be non-empty)"),
+    },
+    ({ annotation_id, note }: { annotation_id: string; note: string }) =>
+      updateAnnotationNote(annotation_id, note),
+  );
+
+  mcpTool(
+    server,
+    "delete_annotation",
+    "Soft-delete an annotation (sets ZANNOTATIONDELETED=1). Snapshots the Annotations DB and restarts Books.app.",
+    {
+      annotation_id: IdSchema.describe("Annotation UUID or numeric PK"),
+    },
+    ({ annotation_id }: { annotation_id: string }) =>
+      deleteAnnotation(annotation_id),
+  );
+
+  mcpTool(
+    server,
+    "export_annotations_markdown",
+    "Export annotations as Markdown. Pass an asset_id to scope to a single book; omit to export every book grouped under per-book headers. Read-only.",
+    {
+      asset_id: IdSchema.optional().describe(
+        "Optional book asset ID. When omitted, every book's annotations are exported.",
+      ),
+    },
+    ({ asset_id }: { asset_id?: string }) =>
+      exportAnnotationsMarkdownForBook(asset_id),
+  );
+
   return server;
 }
 
@@ -344,9 +398,17 @@ export async function serve(): Promise<void> {
   // Validate the Apple Books schema up front. If a macOS upgrade has changed
   // the Core Data layout, fail loud rather than silently corrupt user data.
   try {
-    const result = validateLibrarySchema(getLibraryDb());
-    if (!result.ok) {
-      console.error(`apple-books-mcp: ${result.message}`);
+    const libraryResult = validateLibrarySchema(getLibraryDb());
+    if (!libraryResult.ok) {
+      console.error(`apple-books-mcp: ${libraryResult.message}`);
+      console.error(
+        "apple-books-mcp: refusing to start; please open an issue with your macOS / Books version.",
+      );
+      process.exit(2);
+    }
+    const annotationResult = validateAnnotationSchema(getAnnotationDb());
+    if (!annotationResult.ok) {
+      console.error(`apple-books-mcp: ${annotationResult.message}`);
       console.error(
         "apple-books-mcp: refusing to start; please open an issue with your macOS / Books version.",
       );
@@ -356,7 +418,7 @@ export async function serve(): Promise<void> {
     // Most likely cause: Full Disk Access not granted, so we cannot read the
     // Library file at all. Log a helpful pointer and exit.
     console.error(
-      "apple-books-mcp: could not open the Apple Books library:",
+      "apple-books-mcp: could not open the Apple Books databases:",
       error,
     );
     console.error(
