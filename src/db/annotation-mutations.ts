@@ -1,14 +1,10 @@
-import type { LibraryTx, MutationResult } from "./library-mutation.ts";
+import type { LibraryTx } from "./library-mutation.ts";
 import { MutationError } from "./library-mutation.ts";
+import { coreDataNow } from "./core-data.ts";
 import { productionAnnotationMutation } from "./library-mutation-singleton.ts";
 import { Tables } from "./constants.ts";
 
-/** Core Data epoch: 2001-01-01 00:00:00 UTC, in seconds. */
-const CORE_DATA_EPOCH_S = Date.UTC(2001, 0, 1) / 1000;
-
-function coreDataNow(): number {
-  return Date.now() / 1000 - CORE_DATA_EPOCH_S;
-}
+import type { MutationResult } from "./library-mutation.ts";
 
 function mutationResultToLegacyShape<T>(
   result: MutationResult<T>,

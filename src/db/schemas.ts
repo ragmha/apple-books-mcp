@@ -1,14 +1,5 @@
 import { z } from "zod";
-
-// Core Data epoch: 2001-01-01T00:00:00Z
-const CORE_DATA_EPOCH = Date.UTC(2001, 0, 1) / 1000;
-
-/** Convert Core Data timestamp to ISO string */
-function coreDataToISO(timestamp: number | null): string | null {
-  if (timestamp == null) return null;
-  const unixSeconds = timestamp + CORE_DATA_EPOCH;
-  return new Date(unixSeconds * 1000).toISOString();
-}
+import { coreDataToISO } from "./core-data.ts";
 
 // --- Raw row schemas (matching SQLite columns) ---
 

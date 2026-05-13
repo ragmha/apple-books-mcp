@@ -7,6 +7,7 @@ import {
   type Book,
 } from "./schemas.ts";
 import { Tables, EntityTypes } from "./constants.ts";
+import { coreDataNow } from "./core-data.ts";
 import { z } from "zod";
 import {
   MutationError,
@@ -273,16 +274,12 @@ export function createCollectionTx(
     ZDELETEDFLAG: 0,
     ZHIDDEN: 0,
     ZSORTKEY: sortKey,
-    ZLASTMODIFICATION: nowAsCoreDataTimestamp(),
+    ZLASTMODIFICATION: coreDataNow(),
     ZCOLLECTIONID: collectionUuid,
     ZTITLE: name,
   });
 
   return { collectionId: collectionUuid, pk };
-}
-
-function nowAsCoreDataTimestamp(): number {
-  return Date.now() / 1000 - Date.UTC(2001, 0, 1) / 1000;
 }
 
 export async function deleteCollection(

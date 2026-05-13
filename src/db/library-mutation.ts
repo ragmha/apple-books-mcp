@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { coreDataNow } from "./core-data.ts";
 
 /**
  * The handle the caller receives inside a `mutate` callback. Exposes
@@ -334,13 +335,6 @@ export function createLibraryMutation(
       }
     },
   };
-}
-
-/** Core Data epoch: 2001-01-01 00:00:00 UTC. */
-const CORE_DATA_EPOCH_OFFSET_S = Date.UTC(2001, 0, 1) / 1000;
-
-function coreDataNow(): number {
-  return Date.now() / 1000 - CORE_DATA_EPOCH_OFFSET_S;
 }
 
 function makeTx(db: import("bun:sqlite").Database): LibraryTx {
