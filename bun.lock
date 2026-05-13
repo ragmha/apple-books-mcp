@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "apple-books-mcp",
+      "name": "@ragmha/apple-books-mcp",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.27.1",
         "zod": "^4.3.6",

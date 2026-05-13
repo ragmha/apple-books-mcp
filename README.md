@@ -45,7 +45,7 @@ You'll know it worked when this server starts without printing
 ## Install
 
 ```bash
-bun add -g apple-books-mcp        # if/when published to npm
+bun add -g @ragmha/apple-books-mcp        # if/when published to npm
 # or run directly from a clone:
 git clone https://github.com/ragmha/apple-books-mcp.git
 cd apple-books-mcp && bun install
@@ -66,7 +66,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "apple-books": {
       "command": "bunx",
-      "args": ["apple-books-mcp"]
+      "args": ["@ragmha/apple-books-mcp"]
     }
   }
 }
@@ -94,7 +94,7 @@ Add to `.vscode/mcp.json`:
   "servers": {
     "apple-books": {
       "command": "bunx",
-      "args": ["apple-books-mcp"]
+      "args": ["@ragmha/apple-books-mcp"]
     }
   }
 }
@@ -103,7 +103,7 @@ Add to `.vscode/mcp.json`:
 ### Copilot CLI
 
 ```bash
-copilot mcp add apple-books bunx apple-books-mcp
+copilot mcp add apple-books bunx @ragmha/apple-books-mcp
 ```
 
 ## Tools

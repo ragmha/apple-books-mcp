@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 This project follows semantic versioning while the public MCP tool surface is
 still pre-1.0.
 
+## Unreleased
+
+### Changed
+
+- Prepared npm metadata for publishing as the public scoped package
+  `@ragmha/apple-books-mcp`.
+
 ## [0.1.0] - 2026-05-13
 
 ### Added
