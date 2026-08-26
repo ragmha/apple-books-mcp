@@ -57,6 +57,9 @@ const AnnotationRowSchema = z.object({
   ZANNOTATIONMODIFICATIONDATE: z.number().nullable(),
   ZANNOTATIONDELETED: z.number().nullable(),
   ZANNOTATIONISUNDERLINE: z.number().nullable(),
+  ZPLABSOLUTEPHYSICALLOCATION: z.number().nullable(),
+  ZPLLOCATIONRANGESTART: z.number().nullable(),
+  ZPLLOCATIONRANGEEND: z.number().nullable(),
 });
 
 // --- Transformed presentation schemas ---
@@ -115,6 +118,9 @@ export const AnnotationSchema = AnnotationRowSchema.transform((row) => ({
   type: row.ZANNOTATIONTYPE,
   location: row.ZANNOTATIONLOCATION ?? "",
   isUnderline: row.ZANNOTATIONISUNDERLINE === 1,
+  absolutePhysicalLocation: row.ZPLABSOLUTEPHYSICALLOCATION,
+  rangeStart: row.ZPLLOCATIONRANGESTART,
+  rangeEnd: row.ZPLLOCATIONRANGEEND,
   creationDate: coreDataToISO(row.ZANNOTATIONCREATIONDATE),
   modificationDate: coreDataToISO(row.ZANNOTATIONMODIFICATIONDATE),
 }));

@@ -4,6 +4,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { exportAnnotationsMarkdownForBook } from "./db/annotation-export.ts";
 import {
+  createAnnotation,
   deleteAnnotation,
   updateAnnotationNote,
 } from "./db/annotation-mutations.ts";
@@ -55,6 +56,14 @@ export const HighlightColorSchema = z.enum([
   "pink",
   "purple",
 ]);
+
+const HighlightStyleByColor = {
+  green: 1,
+  blue: 2,
+  yellow: 3,
+  pink: 4,
+  purple: 5,
+} as const;
 
 // Pagination schema reused across list/search tools so the same params and
 // docs appear everywhere a tool returns potentially many rows.
@@ -340,6 +349,81 @@ export function createServer(): McpServer {
   // Operate on the AEAnnotation Core Data store (separate file from the
   // Library). Each routes through its own LibraryMutation instance with
   // the same safety ceremony as Library writes.
+
+  mcpTool(
+    server,
+    "create_annotation",
+    "EXPERIMENTAL: Create a type-2 Apple Books highlight at exact caller-supplied EPUB coordinates. Snapshots the Annotations DB and restarts Books.app.",
+    {
+      book_id: IdSchema.describe("Book asset ID or numeric PK"),
+      selected_text: z
+        .string()
+        .min(1)
+        .max(10_000)
+        .describe("Exact text covered by the highlight"),
+      location: z
+        .string()
+        .min(1)
+        .max(4096)
+        .describe("Exact Apple Books/EPUB location string"),
+      absolute_physical_location: z
+        .number()
+        .int()
+        .min(0)
+        .describe("Apple Books absolute physical location"),
+      range_start: z
+        .number()
+        .int()
+        .min(0)
+        .describe("Apple Books physical location range start"),
+      range_end: z
+        .number()
+        .int()
+        .min(0)
+        .describe("Apple Books physical location range end"),
+      color: HighlightColorSchema.optional().describe(
+        "Highlight color (default yellow)",
+      ),
+      note: z.string().max(10_000).optional(),
+      representative_text: z.string().max(10_000).optional(),
+      is_underline: z.boolean().optional().describe("Create as underline"),
+    },
+    ({
+      book_id,
+      selected_text,
+      location,
+      absolute_physical_location,
+      range_start,
+      range_end,
+      color,
+      note,
+      representative_text,
+      is_underline,
+    }: {
+      book_id: string;
+      selected_text: string;
+      location: string;
+      absolute_physical_location: number;
+      range_start: number;
+      range_end: number;
+      color?: keyof typeof HighlightStyleByColor;
+      note?: string;
+      representative_text?: string;
+      is_underline?: boolean;
+    }) =>
+      createAnnotation({
+        bookId: book_id,
+        selectedText: selected_text,
+        location,
+        absolutePhysicalLocation: absolute_physical_location,
+        rangeStart: range_start,
+        rangeEnd: range_end,
+        style: HighlightStyleByColor[color ?? "yellow"],
+        isUnderline: is_underline ?? false,
+        note,
+        representativeText: representative_text,
+      }),
+  );
 
   mcpTool(
     server,

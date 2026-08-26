@@ -37,14 +37,27 @@ const REQUIRED_ANNOTATIONS: Array<{ table: string; columns: string[] }> = [
     table: Tables.Annotations,
     columns: [
       "Z_PK",
+      "Z_ENT",
       "Z_OPT",
+      "ZPLABSOLUTEPHYSICALLOCATION",
+      "ZPLLOCATIONRANGEEND",
+      "ZPLLOCATIONRANGESTART",
       "ZANNOTATIONUUID",
       "ZANNOTATIONASSETID",
+      "ZANNOTATIONCREATORIDENTIFIER",
+      "ZANNOTATIONLOCATION",
       "ZANNOTATIONNOTE",
+      "ZANNOTATIONREPRESENTATIVETEXT",
+      "ZANNOTATIONSELECTEDTEXT",
+      "ZANNOTATIONSTYLE",
+      "ZANNOTATIONTYPE",
+      "ZANNOTATIONISUNDERLINE",
+      "ZANNOTATIONCREATIONDATE",
       "ZANNOTATIONDELETED",
       "ZANNOTATIONMODIFICATIONDATE",
     ],
   },
+  { table: "Z_PRIMARYKEY", columns: ["Z_ENT", "Z_NAME", "Z_MAX"] },
 ];
 
 export function validateLibrarySchema(db: Database): SchemaCheckResult {

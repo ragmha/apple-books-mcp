@@ -122,8 +122,12 @@ export function createSeededAnnotationDb(): Database {
       Z_PK INTEGER PRIMARY KEY,
       Z_ENT INTEGER,
       Z_OPT INTEGER,
+      ZPLABSOLUTEPHYSICALLOCATION INTEGER,
+      ZPLLOCATIONRANGEEND INTEGER,
+      ZPLLOCATIONRANGESTART INTEGER,
       ZANNOTATIONUUID TEXT,
       ZANNOTATIONASSETID TEXT,
+      ZANNOTATIONCREATORIDENTIFIER TEXT,
       ZANNOTATIONSELECTEDTEXT TEXT,
       ZANNOTATIONNOTE TEXT,
       ZANNOTATIONREPRESENTATIVETEXT TEXT,
@@ -136,6 +140,9 @@ export function createSeededAnnotationDb(): Database {
       ZANNOTATIONISUNDERLINE INTEGER
     )
   `);
+  db.run(
+    "INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME, Z_SUPER, Z_MAX) VALUES (1, 'AEAnnotation', 0, 0)",
+  );
   return db;
 }
 
@@ -150,19 +157,22 @@ export function seedAnnotation(
     note?: string;
     style?: number;
     deleted?: boolean;
+    creatorIdentifier?: string;
   },
 ): void {
   db.run(
     `INSERT INTO ${Tables.Annotations}
      (Z_PK, Z_ENT, Z_OPT, ZANNOTATIONUUID, ZANNOTATIONASSETID,
-      ZANNOTATIONSELECTEDTEXT, ZANNOTATIONNOTE, ZANNOTATIONSTYLE,
+      ZANNOTATIONCREATORIDENTIFIER, ZANNOTATIONSELECTEDTEXT,
+      ZANNOTATIONNOTE, ZANNOTATIONSTYLE,
       ZANNOTATIONTYPE, ZANNOTATIONDELETED,
       ZANNOTATIONCREATIONDATE, ZANNOTATIONMODIFICATIONDATE)
-     VALUES (?, 1, 1, ?, ?, ?, ?, ?, 0, ?, 0, 0)`,
+     VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0)`,
     [
       opts.pk,
       opts.uuid,
       opts.assetId,
+      opts.creatorIdentifier ?? null,
       opts.selectedText ?? "",
       opts.note ?? "",
       opts.style ?? 1,

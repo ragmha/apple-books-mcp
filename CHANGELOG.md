@@ -13,6 +13,9 @@ still pre-1.0.
 - `.nvmrc` to pin the Node/npm publishing toolchain.
 - Remotion demo source with sanitized read/write walkthrough, transcript, and
   reusable MCP client prompts.
+- Experimental `create_annotation` tool for type-2 highlights at exact
+  caller-supplied EPUB and physical coordinates.
+- Physical location and range fields in annotation read results.
 
 ### Changed
 

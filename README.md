@@ -172,10 +172,26 @@ All list/search tools accept `limit` (default 50, max 100) and `offset`.
 | `remove_book_from_collection` | Remove a book from a collection |
 | `create_collection` | Returns the new `collectionId` (UUID) |
 | `delete_collection` | Soft delete (`ZDELETEDFLAG = 1`) |
+| `create_annotation` | **Experimental:** create a type-2 highlight at exact caller-supplied EPUB coordinates |
 | `update_annotation_note` | Rewrite the note text on a highlight |
 | `delete_annotation` | Soft-delete an annotation (`ZANNOTATIONDELETED = 1`) |
 | `list_backups` | Enumerate previously-taken Library snapshots, newest first |
 | `restore_backup` | Roll the Library back to a chosen snapshot (with the same safety ceremony as a write) |
+
+#### Experimental anchored highlight creation
+
+`create_annotation` does not search or parse the ebook. The caller must supply
+the exact `location`, `absolute_physical_location`, `range_start`, and
+`range_end` values for the selected text. Annotation read tools expose these
+coordinate fields so an ebook-aware client can preserve the same representation.
+The tool also requires `book_id` and `selected_text`; `color` (yellow by
+default), `note`, `representative_text`, and `is_underline` are optional.
+
+This write path is experimental because Apple provides no supported Books
+annotation API. Invalid coordinates may produce a highlight that Books cannot
+display correctly. The normal snapshot, integrity check, transaction, rollback,
+and Books.app restart protections still apply, but callers should verify the
+coordinates before invoking the tool.
 
 ## Backups & restore
 
