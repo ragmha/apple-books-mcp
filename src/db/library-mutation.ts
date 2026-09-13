@@ -85,12 +85,41 @@ export interface LibraryStore {
   /** Enumerate the rotated backups this store has previously taken. */
   listBackups(): BackupInfo[];
 
-  /**
-   * Restore the live Library from a previously-taken backup. Production
-   * overwrites the live `.sqlite` file with the backup's bytes. Caller must
-   * ensure Books.app is not running and that integrity has been verified.
-   */
-  restoreFromBackup(handle: string): void;
+  /** Restore through SQLite, never by replacing an open database's bytes. */
+  restoreFromBackup(handle: string): void | Promise<void>;
+
+  /** Hold exclusive SQLite ownership across the complete restore ceremony. */
+  prepareRestore?(handle: string): Promise<RestoreLease>;
+}
+
+export interface RestoreLease {
+  snapshot(): Promise<string>;
+  restoreFromBackup(): Promise<void>;
+  close(): Promise<void>;
+}
+
+export class RestoreUnavailableError extends Error {
+  constructor(options?: ErrorOptions) {
+    super(
+      "Restore requires the macOS SQLite command-line tool at /usr/bin/sqlite3; it could not be started.",
+      options,
+    );
+  }
+}
+
+/** A storage failure with an explicitly-known recovery outcome. */
+export class RestoreFailure extends Error {
+  constructor(
+    readonly recovered: boolean,
+    options?: ErrorOptions,
+  ) {
+    super(
+      recovered
+        ? "Restore failed; the verified pre-restore state was recovered."
+        : "Restore failed and recovery could not be verified. Keep Books.app closed and recover from the safety snapshot.",
+      options,
+    );
+  }
 }
 
 /** Metadata about one rotated backup of the Library. */
@@ -125,7 +154,7 @@ export interface LibraryMutation {
   /**
    * Restore the live Library from a previously-taken backup, with the same
    * safety ceremony as `mutate`: verify integrity → quit Books → take a
-   * pre-restore safety snapshot → swap the file → relaunch Books.
+   * verified pre-restore safety snapshot → SQLite restore → verify → relaunch.
    *
    * Returns a structured `RestoreResult` rather than throwing — the same
    * sanitisation rules as `mutate` apply, so raw error text never reaches
@@ -148,98 +177,100 @@ export function createLibraryMutation(
   store: LibraryStore,
   booksApp: BooksAppPort,
 ): LibraryMutation {
-  return {
-    listBackups() {
-      return store.listBackups();
-    },
-
-    async restore(handle) {
-      // 1. Verify the chosen backup BEFORE doing anything destructive.
-      //    A corrupt backup is unrecoverable, so abort early.
+  async function restore(handle: string): Promise<RestoreResult> {
+    let safetyBackupPath: string | undefined;
+    let lease: RestoreLease | undefined;
+    let phase = "backup integrity verification";
+    let restored = false;
+    let failure: unknown;
+    let cleanupFailed = false;
+    try {
       if (!store.verifySnapshot(handle)) {
         return {
           success: false,
           message: `Backup ${handle} failed integrity check; aborted before any change.`,
         };
       }
-
-      // 2. Quit Books so the file copy is safe (Books holds the SQLite
-      //    file open in WAL mode otherwise).
-      try {
-        if (await booksApp.isRunning()) {
-          await booksApp.quit();
-        }
-      } catch (error) {
-        console.error("LibraryMutation.restore: quit failed:", error);
-        return {
-          success: false,
-          message: "Operation failed: could not quit Books.app.",
-        };
+      phase = "quit Books.app";
+      if (await booksApp.isRunning()) {
+        await booksApp.quit();
       }
-
-      // 3. Snapshot the CURRENT state before overwriting it. If the user
-      //    chose the wrong backup, this safety snapshot is their escape hatch.
-      let safetyBackupPath: string;
-      try {
-        safetyBackupPath = store.snapshot();
-      } catch (error) {
-        console.error(
-          "LibraryMutation.restore: pre-restore safety snapshot failed:",
-          error,
-        );
+      phase = "exclusive restore setup";
+      lease = await store.prepareRestore?.(handle);
+      phase = "pre-restore safety snapshot";
+      safetyBackupPath = lease ? await lease.snapshot() : store.snapshot();
+      if (!store.verifySnapshot(safetyBackupPath)) {
         return {
           success: false,
           message:
-            "Operation failed: could not take pre-restore safety snapshot of current Library.",
-        };
-      }
-
-      // 4. Overwrite the live Library with the chosen backup's bytes.
-      try {
-        store.restoreFromBackup(handle);
-      } catch (error) {
-        console.error("LibraryMutation.restore: file swap failed:", error);
-        return {
-          success: false,
-          message: `Operation failed during file swap. Pre-restore safety snapshot saved at ${safetyBackupPath}.`,
+            "Pre-restore safety snapshot failed integrity check; aborted before restoring.",
           safetyBackupPath,
         };
       }
-
-      // 5. Relaunch Books. A launch failure here is non-fatal — the data
-      //    is restored on disk; the user can reopen Books manually.
-      try {
-        await booksApp.launch();
-      } catch (error) {
-        console.error(
-          "LibraryMutation.restore: launch failed after successful restore:",
-          error,
-        );
+      phase = "file swap";
+      if (lease) await lease.restoreFromBackup();
+      else await store.restoreFromBackup(handle);
+      restored = true;
+    } catch (error) {
+      failure = error;
+      console.error(`LibraryMutation.restore: ${phase} failed:`, error);
+    } finally {
+      if (lease) {
+        try {
+          await lease.close();
+        } catch (error) {
+          cleanupFailed = true;
+          console.error(
+            "LibraryMutation.restore: lease cleanup failed:",
+            error,
+          );
+        }
       }
-
-      return {
-        success: true,
-        restoredFrom: handle,
-        safetyBackupPath,
-        message: `Restored Library from ${handle}. Pre-restore safety snapshot saved at ${safetyBackupPath}.`,
-      };
-    },
-
-    async mutate(fn, options) {
-      // Outer try/catch: any failure during setup (snapshot, verify, quit,
-      // openWritable, BEGIN) must surface as a structured MutationResult,
-      // never reject the promise.
-      let backupPath: string;
-      try {
-        backupPath = store.snapshot();
-      } catch (error) {
-        console.error("LibraryMutation snapshot failed:", error);
-        return {
-          success: false,
-          message: "Operation failed: could not snapshot the Library.",
-        };
+    }
+    if (!restored || cleanupFailed || !safetyBackupPath) {
+      let message =
+        failure instanceof RestoreFailure ||
+        failure instanceof RestoreUnavailableError
+          ? failure.message
+          : `Operation failed during ${phase}.`;
+      if (restored && cleanupFailed) {
+        message =
+          "Restore was committed and verified, but connection cleanup failed. Books.app was not relaunched.";
       }
+      if (safetyBackupPath) {
+        message += ` Pre-restore safety snapshot saved at ${safetyBackupPath}.`;
+      }
+      return { success: false, message, safetyBackupPath };
+    }
+    let launchWarning = "";
+    try {
+      await booksApp.launch();
+    } catch (error) {
+      console.error(
+        "LibraryMutation.restore: launch failed after restore:",
+        error,
+      );
+      launchWarning = " Reopen Books.app manually.";
+    }
+    return {
+      success: true,
+      restoredFrom: handle,
+      safetyBackupPath,
+      message: `Restored Library from ${handle}. Pre-restore safety snapshot saved at ${safetyBackupPath}.${launchWarning}`,
+    };
+  }
 
+  async function mutate<T>(
+    fn: LibraryTxFn<T>,
+    options?: MutationOptions,
+  ): Promise<MutationResult<T>> {
+    let backupPath: string | undefined;
+    let db: Database | undefined;
+    let transactionActive = false;
+    let phase = "snapshot the Library";
+    try {
+      backupPath = store.snapshot();
+      phase = "verify the snapshot";
       if (!store.verifySnapshot(backupPath)) {
         return {
           success: false,
@@ -247,99 +278,88 @@ export function createLibraryMutation(
           backupPath,
         };
       }
-
-      try {
-        if (await booksApp.isRunning()) {
-          await booksApp.quit();
-        }
-      } catch (error) {
-        console.error("LibraryMutation quit failed:", error);
-        return {
-          success: false,
-          message: `Operation failed: could not quit Books.app. Backup: ${backupPath}`,
-          backupPath,
-        };
+      phase = "quit Books.app";
+      if (await booksApp.isRunning()) {
+        await booksApp.quit();
       }
-
-      const db = store.openWritable();
-      // The transaction is only `active` between BEGIN and COMMIT/ROLLBACK.
-      // Track it explicitly so the cleanup path never tries to ROLLBACK after
-      // a successful COMMIT (which throws "no transaction is active") and so
-      // a launch failure post-COMMIT does not undo a persisted change.
-      let transactionActive = false;
-      let committed = false;
-      try {
-        db.run("BEGIN IMMEDIATE");
-        transactionActive = true;
-        const tx = makeTx(db);
-        const data = await fn(tx);
-        db.run("COMMIT");
-        transactionActive = false;
-        committed = true;
-
-        if (!options?.skipRestart) {
-          try {
-            await booksApp.launch();
-          } catch (error) {
-            // Launch failed AFTER the data committed. The mutation succeeded;
-            // the user just has to reopen Books manually. Log and continue.
-            console.error(
-              "LibraryMutation: launch failed after successful COMMIT:",
-              error,
-            );
-          }
+      phase = "open the writable Library";
+      db = store.openWritable();
+      phase = "begin the transaction";
+      db.run("BEGIN IMMEDIATE");
+      transactionActive = true;
+      phase = "apply the mutation";
+      const data = await fn(makeTx(db));
+      phase = "confirm the commit";
+      db.run("COMMIT");
+      transactionActive = false;
+      let launchWarning = "";
+      if (!options?.skipRestart) {
+        try {
+          await booksApp.launch();
+        } catch (error) {
+          console.error("LibraryMutation: launch failed after COMMIT:", error);
+          launchWarning = " Reopen Books.app manually.";
         }
-
-        return {
-          success: true,
-          data,
-          message: "Mutation applied successfully.",
-          backupPath,
-        };
-      } catch (error) {
-        if (transactionActive) {
-          // ROLLBACK can itself throw (e.g. SQLite reports "no active
-          // transaction" if COMMIT half-succeeded). Wrap it so the cleanup
-          // failure does not mask the original error from the caller.
-          try {
-            db.run("ROLLBACK");
-          } catch (rollbackError) {
-            console.error(
-              "LibraryMutation: ROLLBACK failed during cleanup:",
-              rollbackError,
-            );
-          }
-          transactionActive = false;
-        }
-
-        if (committed) {
-          // Defensive: if we get here it means the post-COMMIT block threw
-          // somehow despite the inner try/catch around launch. The data is
-          // on disk, so honour that.
-          return {
-            success: true,
-            data: undefined as never,
-            message:
-              "Mutation applied successfully (with post-commit warning).",
-            backupPath,
-          };
-        }
-
-        if (error instanceof MutationError) {
-          return { success: false, message: error.message, backupPath };
-        }
-        // System error: log full detail to stderr, but never surface raw
-        // error text to callers — it may contain user PII (titles, notes)
-        // from SQLite constraint messages.
-        console.error("LibraryMutation system error:", error);
-        return {
-          success: false,
-          message: `Operation failed. Backup: ${backupPath}`,
-          backupPath,
-        };
       }
+      return {
+        success: true,
+        data,
+        message: `Mutation applied successfully.${launchWarning}`,
+        backupPath,
+      };
+    } catch (error) {
+      if (transactionActive && db) {
+        try {
+          db.run("ROLLBACK");
+        } catch (rollbackError) {
+          console.error(
+            "LibraryMutation: ROLLBACK cleanup failed:",
+            rollbackError,
+          );
+        }
+      }
+      if (phase === "apply the mutation" && error instanceof MutationError) {
+        return { success: false, message: error.message, backupPath };
+      }
+      console.error(`LibraryMutation: could not ${phase}:`, error);
+      return {
+        success: false,
+        message: `Operation failed: could not ${phase}.${backupPath ? ` Backup: ${backupPath}` : ""}`,
+        backupPath,
+      };
+    }
+  }
+
+  return {
+    listBackups() {
+      return store.listBackups();
+    },
+    restore(handle) {
+      return coordinateBooksApp(booksApp, () => restore(handle));
+    },
+    mutate(fn, options) {
+      return coordinateBooksApp(booksApp, () => mutate(fn, options));
     },
   };
+}
+
+const appOperations = new WeakMap<BooksAppPort, Promise<void>>();
+
+function coordinateBooksApp<T>(
+  booksApp: BooksAppPort,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = appOperations.get(booksApp) ?? Promise.resolve();
+  const result = previous.then(operation);
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  appOperations.set(booksApp, tail);
+  void tail.then(() => {
+    if (appOperations.get(booksApp) === tail) appOperations.delete(booksApp);
+  });
+  return result;
 }
 
 function makeTx(db: import("bun:sqlite").Database): LibraryTx {

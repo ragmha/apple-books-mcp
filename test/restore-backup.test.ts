@@ -34,6 +34,34 @@ describe("LibraryMutation.listBackups", () => {
 });
 
 describe("LibraryMutation.restore", () => {
+  test("a thrown target verification error resolves to structured failure", async () => {
+    const db = createSeededDb();
+    const store = new FakeLibraryStore(db);
+    store.verifyError = new Error("injected backup constructor failure");
+    const books = new FakeBooksAppPort();
+    const result = await createLibraryMutation(store, books).restore(
+      "backup-A",
+    );
+    expect(result.success).toBe(false);
+    expect(books.calls).toEqual([]);
+    db.close();
+  });
+
+  test("rejects an unverified fresh safety snapshot before restoring", async () => {
+    const db = createSeededDb();
+    const store = new FakeLibraryStore(db);
+    store.verifyResults.set("fake-snapshot-1", false);
+    const books = new FakeBooksAppPort();
+    const result = await createLibraryMutation(store, books).restore(
+      "backup-A",
+    );
+    expect(result.success).toBe(false);
+    expect(result.safetyBackupPath).toBe("fake-snapshot-1");
+    expect(store.restoresPerformed).toBe(0);
+    expect(books.calls).not.toContain("launch");
+    db.close();
+  });
+
   test("verifies backup, quits Books, takes safety snapshot, swaps file, launches Books", async () => {
     const db = createSeededDb();
     const callLog: string[] = [];
@@ -63,6 +91,7 @@ describe("LibraryMutation.restore", () => {
       "isRunning",
       "quit",
       "snapshot",
+      "verify:fake-snapshot-1",
       "restoreFromBackup:backup-A",
       "launch",
     ]);

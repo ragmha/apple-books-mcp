@@ -13,8 +13,8 @@ export function listLibraryBackups(): BackupInfo[] {
 /**
  * Public write-side helper: restore the live Apple Books Library from a
  * previously-taken backup. Routes through `LibraryMutation.restore`, which
- * verifies integrity, quits Books, takes a fresh pre-restore safety snapshot,
- * swaps the file, and relaunches Books.
+ * verifies integrity, quits Books, takes a verified safety snapshot under an
+ * exclusive SQLite lease, restores and verifies the data, then relaunches Books.
  *
  * Returns a flat success/message shape for MCP serialisation; the
  * pre-restore safety snapshot path is included in the message on both the
