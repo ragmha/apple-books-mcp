@@ -473,3 +473,87 @@ for (const fault of [
     }
   });
 }
+
+for (const retry of ["busy reader", "closed lease"] as const) {
+  test(`an earlier recovery pin survives a ${retry} retry`, async () => {
+    let failInitialRecovery = true;
+    const fixture = filesystemFixture("library", undefined, {
+      operations: {
+        async openRestore(path, dir) {
+          const real = await openSqliteRestore(path, dir);
+          if (!failInitialRecovery) return real;
+          let restores = 0;
+          return {
+            ...real,
+            async restore(source) {
+              if (++restores === 2) {
+                throw new Error("injected initial recovery failure");
+              }
+              await real.restore(source);
+            },
+            async verify() {
+              return false;
+            },
+          };
+        },
+      },
+    });
+    try {
+      const live = fixture.openWritable();
+      live.run("CREATE TABLE recovery_pin_probe (value TEXT)");
+      live.run("INSERT INTO recovery_pin_probe VALUES ('old target')");
+      const target = fixture.store.snapshot();
+      live.run("UPDATE recovery_pin_probe SET value = 'newer safety data'");
+      const books = new FakeBooksAppPort();
+      const mutation = createLibraryMutation(fixture.store, books);
+      const failed = await mutation.restore(target);
+      expect(failed.success).toBe(false);
+      expect(failed.message).toContain("recovery could not be verified");
+      const safety = failed.safetyBackupPath;
+      if (!safety) throw new Error("Missing initial recovery snapshot");
+      expect(
+        fixture
+          .openWritable()
+          .query("SELECT value FROM recovery_pin_probe")
+          .get(),
+      ).toEqual({ value: "old target" });
+      failInitialRecovery = false;
+
+      if (retry === "busy reader") {
+        const reader = new Database(fixture.dbPath, { readonly: true });
+        try {
+          reader.run("BEGIN");
+          expect(
+            reader.query("SELECT value FROM recovery_pin_probe").get(),
+          ).toEqual({ value: "old target" });
+          const refused = await mutation.restore(safety);
+          expect(refused.success).toBe(false);
+          expect(refused.message).toContain("exclusive restore setup");
+          expect(refused.safetyBackupPath).toBeUndefined();
+        } finally {
+          reader.close();
+        }
+      } else {
+        const prepare = fixture.store.prepareRestore;
+        if (!prepare) throw new Error("Missing filesystem restore lease");
+        const lease = await prepare(safety);
+        await lease.close();
+      }
+
+      expect(books.calls).not.toContain("launch");
+      for (let i = 0; i < 6; i++) fixture.store.snapshot();
+      expect(existsSync(target)).toBe(true);
+      expect(existsSync(safety)).toBe(true);
+      const recovery = new Database(safety, { readonly: true });
+      try {
+        expect(
+          recovery.query("SELECT value FROM recovery_pin_probe").get(),
+        ).toEqual({ value: "newer safety data" });
+      } finally {
+        recovery.close();
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}

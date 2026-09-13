@@ -376,13 +376,15 @@ export function createFilesystemStore({
     let retainRecovery = false;
     let closed = false;
     let verifiedCopies = 0;
+    // Recovery pins inherited from an earlier failure outlive this lease.
+    const ownsSelectedPin = !pinned.has(selected);
     pinned.add(selected);
     try {
       stageBackup(selected, target);
       closeConnections();
       connection = await ops.openRestore(resolve(getDbPath()), dir);
     } catch (error) {
-      pinned.delete(selected);
+      if (ownsSelectedPin) pinned.delete(selected);
       cleanupStaging(dir);
       throw error;
     }
@@ -451,7 +453,7 @@ export function createFilesystemStore({
           failure ??= error;
         } finally {
           if (!retainRecovery && !failure) {
-            pinned.delete(selected);
+            if (ownsSelectedPin) pinned.delete(selected);
             if (safetyHandle) pinned.delete(safetyHandle);
           }
           cleanupStaging(dir);
