@@ -3,7 +3,7 @@ import { coreDataToISO } from "./core-data.ts";
 
 // --- Raw row schemas (matching SQLite columns) ---
 
-const BookRowSchema = z.object({
+export const BookRowSchema = z.object({
   Z_PK: z.number(),
   ZTITLE: z.string().nullable(),
   ZASSETID: z.string().nullable(),
@@ -31,7 +31,7 @@ const BookRowSchema = z.object({
   ZYEAR: z.string().nullable(),
 });
 
-const CollectionRowSchema = z.object({
+export const CollectionRowSchema = z.object({
   Z_PK: z.number(),
   ZTITLE: z.string().nullable(),
   ZCOLLECTIONID: z.string().nullable(),
@@ -43,7 +43,7 @@ const CollectionRowSchema = z.object({
   ZDETAILS: z.string().nullable(),
 });
 
-const AnnotationRowSchema = z.object({
+export const AnnotationRowSchema = z.object({
   Z_PK: z.number(),
   ZANNOTATIONASSETID: z.string().nullable(),
   ZANNOTATIONSELECTEDTEXT: z.string().nullable(),
