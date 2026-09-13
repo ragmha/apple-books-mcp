@@ -1,5 +1,6 @@
 import { Tables } from "./constants.ts";
 import { coreDataNow } from "./core-data.ts";
+import { resolveIdentifier } from "./identifiers.ts";
 import type { LibraryTx, MutationResult } from "./library-mutation.ts";
 import { MutationError } from "./library-mutation.ts";
 import { productionAnnotationMutation } from "./library-mutation-singleton.ts";
@@ -34,11 +35,12 @@ interface AnnotationRow {
  * can branch on existing state (e.g. "already deleted").
  */
 function resolveAnnotation(tx: LibraryTx, id: string): AnnotationRow {
-  const numId = Number.parseInt(id, 10);
-  const row = tx.query<AnnotationRow>(
-    `SELECT Z_PK, ZANNOTATIONUUID, ZANNOTATIONDELETED FROM ${Tables.Annotations}
-     WHERE ZANNOTATIONUUID = ? OR Z_PK = ?`,
-    [id, Number.isNaN(numId) ? -1 : numId],
+  const row = resolveIdentifier(id, "ZANNOTATIONUUID", (predicate, params) =>
+    tx.query<AnnotationRow>(
+      `SELECT Z_PK, ZANNOTATIONUUID, ZANNOTATIONDELETED FROM ${Tables.Annotations}
+       WHERE ${predicate}`,
+      params,
+    ),
   );
   if (!row) throw new MutationError(`Annotation not found: ${id}`);
   return row;
@@ -59,6 +61,9 @@ export function updateAnnotationNoteTx(
     throw new MutationError("Note text must not be empty.");
   }
   const row = resolveAnnotation(tx, annotationId);
+  if ((row.ZANNOTATIONDELETED ?? 0) !== 0) {
+    throw new MutationError(`Annotation ${annotationId} is already deleted.`);
+  }
   tx.run(
     `UPDATE ${Tables.Annotations}
      SET ZANNOTATIONNOTE = ?,
@@ -79,7 +84,7 @@ export function deleteAnnotationTx(
   annotationId: string,
 ): { annotationPk: number } {
   const row = resolveAnnotation(tx, annotationId);
-  if (row.ZANNOTATIONDELETED === 1) {
+  if ((row.ZANNOTATIONDELETED ?? 0) !== 0) {
     throw new MutationError(`Annotation ${annotationId} is already deleted.`);
   }
   tx.run(

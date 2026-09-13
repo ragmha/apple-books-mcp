@@ -114,6 +114,38 @@ describe("updateAnnotationNoteTx", () => {
 });
 
 describe("deleteAnnotationTx", () => {
+  test("resolves a lowercase UUID before a colliding numeric prefix PK", async () => {
+    const db = createSeededAnnotationDb();
+    const uuid = "14F00000-0000-4000-8000-000000000099";
+    seedAnnotation(db, { pk: 14, uuid: "unrelated", assetId: "book-1" });
+    seedAnnotation(db, { pk: 99, uuid, assetId: "book-1" });
+    const mutation = createLibraryMutation(
+      new FakeLibraryStore(db),
+      new FakeBooksAppPort(),
+    );
+
+    try {
+      const result = await mutation.mutate((tx) =>
+        deleteAnnotationTx(tx, uuid.toLowerCase()),
+      );
+
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.annotationPk).toBe(99);
+      expect(
+        db
+          .query<{ Z_PK: number; ZANNOTATIONDELETED: number }, []>(
+            `SELECT Z_PK, ZANNOTATIONDELETED FROM ${Tables.Annotations} ORDER BY Z_PK`,
+          )
+          .all(),
+      ).toEqual([
+        { Z_PK: 14, ZANNOTATIONDELETED: 0 },
+        { Z_PK: 99, ZANNOTATIONDELETED: 1 },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   test("soft-deletes by UUID (sets ZANNOTATIONDELETED=1, bumps Z_OPT)", async () => {
     const db = createSeededAnnotationDb();
     seedAnnotation(db, { pk: 1, uuid: "ann-A", assetId: "book-1" });

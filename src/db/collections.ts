@@ -1,87 +1,88 @@
-import { z } from "zod";
+import type { Database } from "bun:sqlite";
 import { getLibraryDb } from "./connection.ts";
 import { EntityTypes, Tables } from "./constants.ts";
 import { coreDataNow } from "./core-data.ts";
+import { resolveIdentifier } from "./identifiers.ts";
 import {
   type LibraryTx,
   MutationError,
   type MutationResult,
 } from "./library-mutation.ts";
 import { productionMutation } from "./library-mutation-singleton.ts";
+import { resolvePagination } from "./pagination.ts";
 import { createDb } from "./query.ts";
 import {
   type Book,
   BookSchema,
   type Collection,
+  CollectionRowSchema,
   CollectionSchema,
 } from "./schemas.ts";
 
-export function listCollections(): Collection[] {
-  const db = createDb(getLibraryDb());
-  return db
-    .selectFrom(Tables.Collections, CollectionSchema)
-    .selectAll()
-    .whereRaw("COALESCE(ZDELETEDFLAG, 0) = 0")
-    .where("ZTITLE", "!=", "Sync Placeholder")
-    .orderBy("ZSORTKEY")
-    .execute();
-}
-
-export function getCollectionById(collectionId: string): Collection | null {
-  const db = createDb(getLibraryDb());
-
-  let collection = db
-    .selectFrom(Tables.Collections, CollectionSchema)
-    .selectAll()
-    .where("ZCOLLECTIONID", "=", collectionId)
-    .get();
-
-  if (!collection) {
-    const numId = parseInt(collectionId, 10);
-    if (!Number.isNaN(numId)) {
-      collection = db
-        .selectFrom(Tables.Collections, CollectionSchema)
-        .selectAll()
-        .where("Z_PK", "=", numId)
-        .get();
-    }
-  }
-  return collection;
-}
-
-const PkRowSchema = z.object({ Z_PK: z.number() });
-
-export function getCollectionBooks(collectionId: string): Book[] {
-  const rawDb = getLibraryDb();
+function resolveCollection(rawDb: Database, collectionId: string) {
   const db = createDb(rawDb);
+  const collection = resolveIdentifier(
+    collectionId,
+    "ZCOLLECTIONID",
+    (predicate, params) =>
+      db
+        .selectFrom(Tables.Collections, CollectionRowSchema)
+        .selectAll()
+        .whereRaw(predicate, params)
+        .get(),
+  );
+  return collection && (collection.ZDELETEDFLAG ?? 0) === 0 ? collection : null;
+}
 
-  // Resolve collection Z_PK
-  let collectionPk: number | null = null;
-  const byId = db
-    .selectFrom(Tables.Collections, PkRowSchema)
-    .select("Z_PK")
-    .where("ZCOLLECTIONID", "=", collectionId)
-    .get();
-
-  if (byId) {
-    collectionPk = byId.Z_PK;
-  } else {
-    const numId = parseInt(collectionId, 10);
-    if (!Number.isNaN(numId)) collectionPk = numId;
+export function createCollectionQueries(getDatabase: () => Database) {
+  function listCollections(limit?: number, offset?: number): Collection[] {
+    const pagination = resolvePagination(limit, offset);
+    const db = createDb(getDatabase());
+    return db
+      .selectFrom(Tables.Collections, CollectionSchema)
+      .selectAll()
+      .whereRaw("COALESCE(ZDELETEDFLAG, 0) = 0")
+      .where("ZTITLE", "!=", "Sync Placeholder")
+      .orderBy("ZSORTKEY")
+      .orderBy("Z_PK")
+      .limit(pagination.limit)
+      .offset(pagination.offset)
+      .execute();
   }
-  if (collectionPk == null) return [];
 
-  // Use raw query for JOIN (query builder doesn't transform joined results well)
-  const rows = rawDb
-    .query(
-      `SELECT a.* FROM ${Tables.Books} a
+  function getCollectionById(collectionId: string): Collection | null {
+    const collection = resolveCollection(getDatabase(), collectionId);
+    return collection ? CollectionSchema.parse(collection) : null;
+  }
+
+  function getCollectionBooks(
+    collectionId: string,
+    limit?: number,
+    offset?: number,
+  ): Book[] {
+    const pagination = resolvePagination(limit, offset);
+    const rawDb = getDatabase();
+    const collection = resolveCollection(rawDb, collectionId);
+    if (!collection) return [];
+
+    // Use raw query for JOIN (query builder doesn't transform joined results well)
+    const rows = rawDb
+      .query(
+        `SELECT a.* FROM ${Tables.Books} a
        JOIN ${Tables.CollectionMembers} cm ON cm.ZASSET = a.Z_PK
        WHERE cm.ZCOLLECTION = ?
-       ORDER BY a.ZSORTTITLE ASC`,
-    )
-    .all(collectionPk);
-  return rows.map((row) => BookSchema.parse(row));
+       ORDER BY a.ZSORTTITLE ASC, a.Z_PK ASC, cm.Z_PK ASC
+       LIMIT ? OFFSET ?`,
+      )
+      .all(collection.Z_PK, pagination.limit, pagination.offset);
+    return rows.map((row) => BookSchema.parse(row));
+  }
+
+  return { listCollections, getCollectionById, getCollectionBooks };
 }
+
+export const { listCollections, getCollectionById, getCollectionBooks } =
+  createCollectionQueries(getLibraryDb);
 
 // --- Write operations ---
 //
@@ -105,6 +106,34 @@ export async function addBookToCollection(
   return mutationResultToLegacyShape(result, "Added book to collection.");
 }
 
+function resolveBookTx(tx: LibraryTx, id: string) {
+  const book = resolveIdentifier(id, "ZASSETID", (predicate, params) =>
+    tx.query<{ Z_PK: number; ZASSETID: string | null }>(
+      `SELECT Z_PK, ZASSETID FROM ${Tables.Books} WHERE ${predicate}`,
+      params,
+    ),
+  );
+  if (!book) throw new MutationError(`Book not found: ${id}`);
+  return book;
+}
+
+function resolveCollectionTx(tx: LibraryTx, id: string) {
+  const collection = resolveIdentifier(
+    id,
+    "ZCOLLECTIONID",
+    (predicate, params) =>
+      tx.query<{ Z_PK: number; ZDELETEDFLAG: number | null }>(
+        `SELECT Z_PK, ZDELETEDFLAG FROM ${Tables.Collections} WHERE ${predicate}`,
+        params,
+      ),
+  );
+  if (!collection) throw new MutationError(`Collection not found: ${id}`);
+  if ((collection.ZDELETEDFLAG ?? 0) !== 0) {
+    throw new MutationError(`Collection ${id} is already deleted.`);
+  }
+  return collection;
+}
+
 /**
  * Pure description of "add this book to this collection" against an open
  * LibraryTx. Throws MutationError for user-visible problems (book or
@@ -116,23 +145,8 @@ export function addBookToCollectionTx(
   bookId: string,
   collectionId: string,
 ): { bookPk: number; collectionPk: number } {
-  const numBookId = Number.parseInt(bookId, 10);
-  const book = tx.query<{ Z_PK: number; ZASSETID: string }>(
-    `SELECT Z_PK, ZASSETID FROM ${Tables.Books}
-     WHERE ZASSETID = ? OR Z_PK = ?`,
-    [bookId, Number.isNaN(numBookId) ? -1 : numBookId],
-  );
-  if (!book) throw new MutationError(`Book not found: ${bookId}`);
-
-  const numCollId = Number.parseInt(collectionId, 10);
-  const collection = tx.query<{ Z_PK: number }>(
-    `SELECT Z_PK FROM ${Tables.Collections}
-     WHERE ZCOLLECTIONID = ? OR Z_PK = ?`,
-    [collectionId, Number.isNaN(numCollId) ? -1 : numCollId],
-  );
-  if (!collection) {
-    throw new MutationError(`Collection not found: ${collectionId}`);
-  }
+  const book = resolveBookTx(tx, bookId);
+  const collection = resolveCollectionTx(tx, collectionId);
 
   const existing = tx.query(
     `SELECT 1 FROM ${Tables.CollectionMembers}
@@ -199,23 +213,8 @@ export function removeBookFromCollectionTx(
   bookId: string,
   collectionId: string,
 ): { bookPk: number; collectionPk: number } {
-  const numBookId = Number.parseInt(bookId, 10);
-  const book = tx.query<{ Z_PK: number }>(
-    `SELECT Z_PK FROM ${Tables.Books}
-     WHERE ZASSETID = ? OR Z_PK = ?`,
-    [bookId, Number.isNaN(numBookId) ? -1 : numBookId],
-  );
-  if (!book) throw new MutationError(`Book not found: ${bookId}`);
-
-  const numCollId = Number.parseInt(collectionId, 10);
-  const collection = tx.query<{ Z_PK: number }>(
-    `SELECT Z_PK FROM ${Tables.Collections}
-     WHERE ZCOLLECTIONID = ? OR Z_PK = ?`,
-    [collectionId, Number.isNaN(numCollId) ? -1 : numCollId],
-  );
-  if (!collection) {
-    throw new MutationError(`Collection not found: ${collectionId}`);
-  }
+  const book = resolveBookTx(tx, bookId);
+  const collection = resolveCollectionTx(tx, collectionId);
 
   const existing = tx.query<{ Z_PK: number }>(
     `SELECT Z_PK FROM ${Tables.CollectionMembers}
@@ -300,15 +299,7 @@ export function deleteCollectionTx(
   tx: LibraryTx,
   collectionId: string,
 ): { collectionPk: number } {
-  const numCollId = Number.parseInt(collectionId, 10);
-  const collection = tx.query<{ Z_PK: number }>(
-    `SELECT Z_PK FROM ${Tables.Collections}
-     WHERE ZCOLLECTIONID = ? OR Z_PK = ?`,
-    [collectionId, Number.isNaN(numCollId) ? -1 : numCollId],
-  );
-  if (!collection) {
-    throw new MutationError(`Collection not found: ${collectionId}`);
-  }
+  const collection = resolveCollectionTx(tx, collectionId);
 
   tx.softDelete(Tables.Collections, collection.Z_PK);
   return { collectionPk: collection.Z_PK };
