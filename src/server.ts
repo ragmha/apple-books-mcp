@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { exportAnnotationsMarkdownForBook } from "./db/annotation-export.ts";
@@ -39,6 +40,7 @@ import {
   validateLibrarySchema,
 } from "./db/schema-check.ts";
 import { mcpTool } from "./mcp-tool.ts";
+import { ToolArgumentsTransport } from "./mcp-transport.ts";
 
 // Reusable Zod schemas with security constraints.
 export const IdSchema = z
@@ -78,8 +80,45 @@ function notFound(what: string, id: string): McpError {
   return new McpError(ErrorCode.InvalidParams, `${what} not found: ${id}`);
 }
 
-export function createServer(): McpServer {
-  const server = new McpServer(
+class BooksMcpServer extends McpServer {
+  override connect(transport: Transport): Promise<void> {
+    return super.connect(new ToolArgumentsTransport(transport));
+  }
+}
+
+const productionHandlers = {
+  listCollections,
+  getCollectionBooks,
+  getCollectionById,
+  listBooks,
+  listAllBooks,
+  getBookById,
+  searchBooks,
+  listAllAnnotations,
+  getAnnotationsByBookId,
+  getAnnotationById,
+  getHighlightsByColor,
+  searchHighlightedText,
+  searchNotes,
+  fullTextSearch,
+  recentAnnotations,
+  addBookToCollection,
+  removeBookFromCollection,
+  createCollection,
+  deleteCollection,
+  listLibraryBackups,
+  restoreLibraryFromBackup,
+  updateAnnotationNote,
+  deleteAnnotation,
+  exportAnnotationsMarkdownForBook,
+};
+
+export type ServerHandlers = typeof productionHandlers;
+
+export function createServer(
+  handlers: ServerHandlers = productionHandlers,
+): McpServer {
+  const server = new BooksMcpServer(
     { name: "apple-books", version: "0.1.0" },
     { capabilities: { tools: {} } },
   );
@@ -89,18 +128,29 @@ export function createServer(): McpServer {
   mcpTool(
     server,
     "list_collections",
-    "List all collections in the Library.",
-    {},
-    () => listCollections(),
+    "List collections in the Library, paginated (default 50, max 100). Returns an array.",
+    Pagination,
+    ({ limit, offset }: { limit?: number; offset?: number }) =>
+      handlers.listCollections(limit, offset),
   );
 
   mcpTool(
     server,
     "list_collection_books",
-    "Get all books in a particular collection.",
-    { collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)") },
-    ({ collection_id }: { collection_id: string }) =>
-      getCollectionBooks(collection_id),
+    "Get books in a particular collection, paginated (default 50, max 100). Returns an array.",
+    {
+      collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)"),
+      ...Pagination,
+    },
+    ({
+      collection_id,
+      limit,
+      offset,
+    }: {
+      collection_id: string;
+      limit?: number;
+      offset?: number;
+    }) => handlers.getCollectionBooks(collection_id, limit, offset),
   );
 
   mcpTool(
@@ -109,7 +159,7 @@ export function createServer(): McpServer {
     "Get details of a particular collection.",
     { collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)") },
     ({ collection_id }: { collection_id: string }) => {
-      const collection = getCollectionById(collection_id);
+      const collection = handlers.getCollectionById(collection_id);
       if (!collection) throw notFound("Collection", collection_id);
       return collection;
     },
@@ -123,7 +173,7 @@ export function createServer(): McpServer {
     "List books in the Library, paginated.",
     Pagination,
     ({ limit, offset }: { limit?: number; offset?: number }) =>
-      listBooks(limit, offset),
+      handlers.listBooks(limit, offset),
   );
 
   mcpTool(
@@ -131,7 +181,7 @@ export function createServer(): McpServer {
     "list_all_books",
     "List EVERY book in the Library (no pagination). Use list_books unless you really want all rows; large libraries can blow past LLM context.",
     {},
-    () => listAllBooks(),
+    () => handlers.listAllBooks(),
   );
 
   mcpTool(
@@ -140,7 +190,7 @@ export function createServer(): McpServer {
     "Get details of a particular book.",
     { book_id: IdSchema.describe("Book ID (asset ID or numeric PK)") },
     ({ book_id }: { book_id: string }) => {
-      const book = getBookById(book_id);
+      const book = handlers.getBookById(book_id);
       if (!book) throw notFound("Book", book_id);
       return book;
     },
@@ -149,13 +199,22 @@ export function createServer(): McpServer {
   mcpTool(
     server,
     "search_books",
-    "Search books by title, author, or genre (case-insensitive partial match).",
+    "Search books by title, author, or genre (case-insensitive partial match), paginated (default 50, max 100). Returns an array.",
     {
       query: SearchQuerySchema.describe(
         "Search text to match against title, author, or genre",
       ),
+      ...Pagination,
     },
-    ({ query }: { query: string }) => searchBooks(query),
+    ({
+      query,
+      limit,
+      offset,
+    }: {
+      query: string;
+      limit?: number;
+      offset?: number;
+    }) => handlers.searchBooks(query, limit, offset),
   );
 
   // --- Annotation tools (read) ---
@@ -166,7 +225,7 @@ export function createServer(): McpServer {
     "List recent annotations across the Library, paginated. Filters out soft-deleted rows.",
     Pagination,
     ({ limit, offset }: { limit?: number; offset?: number }) =>
-      listAllAnnotations(limit, offset),
+      handlers.listAllAnnotations(limit, offset),
   );
 
   mcpTool(
@@ -175,14 +234,8 @@ export function createServer(): McpServer {
     "Get all annotations for a particular book.",
     { book_id: IdSchema.describe("Book asset ID or numeric PK") },
     ({ book_id }: { book_id: string }) => {
-      // Resolve numeric PK input into ZASSETID; pass UUID-shaped input through.
-      let assetId = book_id;
-      const numId = Number.parseInt(book_id, 10);
-      if (!Number.isNaN(numId) && String(numId) === book_id) {
-        const book = getBookById(book_id);
-        if (book) assetId = book.assetId;
-      }
-      return getAnnotationsByBookId(assetId);
+      const assetId = handlers.getBookById(book_id)?.assetId ?? book_id;
+      return handlers.getAnnotationsByBookId(assetId);
     },
   );
 
@@ -192,7 +245,7 @@ export function createServer(): McpServer {
     "Get details of a particular annotation.",
     { annotation_id: IdSchema.describe("Annotation UUID or numeric PK") },
     ({ annotation_id }: { annotation_id: string }) => {
-      const annotation = getAnnotationById(annotation_id);
+      const annotation = handlers.getAnnotationById(annotation_id);
       if (!annotation) throw notFound("Annotation", annotation_id);
       return annotation;
     },
@@ -216,35 +269,66 @@ export function createServer(): McpServer {
       color: "green" | "blue" | "yellow" | "pink" | "purple";
       limit?: number;
       offset?: number;
-    }) => getHighlightsByColor(color, limit, offset),
+    }) => handlers.getHighlightsByColor(color, limit, offset),
   );
 
   mcpTool(
     server,
     "search_highlighted_text",
-    "Search annotations by highlighted text (case-insensitive partial match).",
-    { text: SearchQuerySchema.describe("Text to search for in highlights") },
-    ({ text }: { text: string }) => searchHighlightedText(text),
+    "Search annotations by highlighted text (case-insensitive partial match), paginated (default 50, max 100). Returns an array.",
+    {
+      text: SearchQuerySchema.describe("Text to search for in highlights"),
+      ...Pagination,
+    },
+    ({
+      text,
+      limit,
+      offset,
+    }: {
+      text: string;
+      limit?: number;
+      offset?: number;
+    }) => handlers.searchHighlightedText(text, limit, offset),
   );
 
   mcpTool(
     server,
     "search_notes",
-    "Search annotations by note text (case-insensitive partial match).",
-    { note: SearchQuerySchema.describe("Text to search for in notes") },
-    ({ note }: { note: string }) => searchNotes(note),
+    "Search annotations by note text (case-insensitive partial match), paginated (default 50, max 100). Returns an array.",
+    {
+      note: SearchQuerySchema.describe("Text to search for in notes"),
+      ...Pagination,
+    },
+    ({
+      note,
+      limit,
+      offset,
+    }: {
+      note: string;
+      limit?: number;
+      offset?: number;
+    }) => handlers.searchNotes(note, limit, offset),
   );
 
   mcpTool(
     server,
     "full_text_search",
-    "Search annotations across highlight text, notes, and representative text.",
+    "Search annotations across highlight text, notes, and representative text, paginated (default 50, max 100). Returns an array.",
     {
       text: SearchQuerySchema.describe(
         "Text to search for across all annotation fields",
       ),
+      ...Pagination,
     },
-    ({ text }: { text: string }) => fullTextSearch(text),
+    ({
+      text,
+      limit,
+      offset,
+    }: {
+      text: string;
+      limit?: number;
+      offset?: number;
+    }) => handlers.fullTextSearch(text, limit, offset),
   );
 
   mcpTool(
@@ -252,7 +336,7 @@ export function createServer(): McpServer {
     "recent_annotations",
     "Get the 10 most recently modified annotations.",
     {},
-    () => recentAnnotations(),
+    () => handlers.recentAnnotations(),
   );
 
   // --- Write tools ---
@@ -271,7 +355,7 @@ export function createServer(): McpServer {
       collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)"),
     },
     ({ book_id, collection_id }: { book_id: string; collection_id: string }) =>
-      addBookToCollection(book_id, collection_id),
+      handlers.addBookToCollection(book_id, collection_id),
   );
 
   mcpTool(
@@ -283,7 +367,7 @@ export function createServer(): McpServer {
       collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)"),
     },
     ({ book_id, collection_id }: { book_id: string; collection_id: string }) =>
-      removeBookFromCollection(book_id, collection_id),
+      handlers.removeBookFromCollection(book_id, collection_id),
   );
 
   mcpTool(
@@ -291,7 +375,7 @@ export function createServer(): McpServer {
     "create_collection",
     "Create a new collection. Snapshots the Library and restarts Books.app.",
     { name: CollectionNameSchema.describe("Name for the new collection") },
-    ({ name }: { name: string }) => createCollection(name),
+    ({ name }: { name: string }) => handlers.createCollection(name),
   );
 
   mcpTool(
@@ -300,7 +384,7 @@ export function createServer(): McpServer {
     "Soft-delete a collection (sets ZDELETEDFLAG=1). Snapshots the Library and restarts Books.app.",
     { collection_id: IdSchema.describe("Collection ID (UUID or numeric PK)") },
     ({ collection_id }: { collection_id: string }) =>
-      deleteCollection(collection_id),
+      handlers.deleteCollection(collection_id),
   );
 
   // --- Backup tools ---
@@ -316,7 +400,7 @@ export function createServer(): McpServer {
     "list_backups",
     "List Apple Books Library backups previously taken before each write, newest first.",
     {},
-    () => listLibraryBackups(),
+    () => handlers.listLibraryBackups(),
   );
 
   mcpTool(
@@ -332,7 +416,8 @@ export function createServer(): McpServer {
           "Backup handle (the `handle` field returned by list_backups; absolute path to the backup file).",
         ),
     },
-    ({ handle }: { handle: string }) => restoreLibraryFromBackup(handle),
+    ({ handle }: { handle: string }) =>
+      handlers.restoreLibraryFromBackup(handle),
   );
 
   // --- Annotation write tools ---
@@ -354,7 +439,7 @@ export function createServer(): McpServer {
         .describe("New note text (must be non-empty)"),
     },
     ({ annotation_id, note }: { annotation_id: string; note: string }) =>
-      updateAnnotationNote(annotation_id, note),
+      handlers.updateAnnotationNote(annotation_id, note),
   );
 
   mcpTool(
@@ -365,7 +450,7 @@ export function createServer(): McpServer {
       annotation_id: IdSchema.describe("Annotation UUID or numeric PK"),
     },
     ({ annotation_id }: { annotation_id: string }) =>
-      deleteAnnotation(annotation_id),
+      handlers.deleteAnnotation(annotation_id),
   );
 
   mcpTool(
@@ -378,7 +463,7 @@ export function createServer(): McpServer {
       ),
     },
     ({ asset_id }: { asset_id?: string }) =>
-      exportAnnotationsMarkdownForBook(asset_id),
+      handlers.exportAnnotationsMarkdownForBook(asset_id),
   );
 
   return server;

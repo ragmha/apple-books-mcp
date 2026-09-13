@@ -8,11 +8,24 @@ import { MutationError } from "./db/library-mutation.ts";
 
 export type McpContent = {
   content: Array<{ type: "text"; text: string }>;
+  isError?: boolean;
 };
+
+function isDomainFailure(result: unknown): result is { success: false } {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    !Array.isArray(result) &&
+    Object.hasOwn(result, "success") &&
+    "success" in result &&
+    result.success === false
+  );
+}
 
 /**
  * Wrap a domain handler so:
  *   - successful results are JSON-serialised into MCP text content
+ *   - explicit returned domain failures keep their payload and set isError
  *   - MutationError becomes McpError(InvalidParams) with the verbatim
  *     message (these are user-facing: "Book not found", etc.)
  *   - any other thrown error becomes McpError(InternalError) with a
@@ -32,6 +45,7 @@ export async function runTool<A, R>(
     const result = await handler(args);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      ...(isDomainFailure(result) ? { isError: true } : {}),
     };
   } catch (error) {
     if (error instanceof McpError) throw error;
