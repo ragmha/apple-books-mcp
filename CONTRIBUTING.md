@@ -15,9 +15,11 @@ bun run typecheck
 bun test
 ```
 
-The `.nvmrc` pins the Node/npm publishing toolchain. The test suite uses
-in-memory SQLite fixtures and fake Books.app adapters. It should not touch
-your real Apple Books library.
+The `.nvmrc` pins the Node/npm publishing toolchain. Tests use in-memory
+SQLite, disposable filesystem databases, and fake Books.app adapters.
+They must not touch your real Apple Books library or control Books.app.
+Storage regressions should exercise the production filesystem adapter against
+temporary fixtures, not a copied implementation or only a call-recording fake.
 
 ## Development loop
 
@@ -45,8 +47,11 @@ the npm package.
 ## Safety rules
 
 - Do not write directly to Apple Books SQLite files outside a mutation seam.
-- Every write must snapshot, verify the snapshot, quit Books.app before the
-  write, run inside `BEGIN IMMEDIATE`, and relaunch only after commit.
+- Every data edit must snapshot, verify the snapshot, quit Books.app before
+  the write, run inside `BEGIN IMMEDIATE`, and relaunch only after commit.
+- Restores must hold an exclusive SQLite restore lease, preserve a verified
+  safety snapshot, and verify the restored database before relaunching.
+  Never replace a live database or delete its WAL files to bypass locking.
 - Never surface raw system errors to MCP callers. SQLite errors may include
   book titles, highlighted text, or notes.
 - Bind user input as SQL parameters. Validate identifier positions with the

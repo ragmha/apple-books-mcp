@@ -17,6 +17,25 @@ still pre-1.0.
 ### Changed
 
 - Updated GitHub Actions workflows to Node 24-compatible action majors.
+- Standardized paginated list/search tools on a default limit of 50 and a
+  maximum of 100 while preserving existing result shapes and full-export tools.
+
+### Fixed
+
+- Resolved natural identifiers before strict numeric primary-key fallback,
+  including UUID casing and soft-deleted target handling.
+- Validated required read/write columns and Core Data allocator mappings
+  before accepting an unsupported database.
+- Accepted omitted arguments for zero-argument and all-optional MCP tools
+  without weakening required-field validation or hiding their input schemas.
+- Marked returned mutation failures as MCP tool errors while preserving
+  sanitized error payloads.
+- Created consistent standalone WAL-aware snapshots with collision-safe names
+  and protected restore targets from backup rotation.
+- Restored through an exclusively locked SQLite connection instead of
+  overwriting a live database with cached handles and WAL files.
+- Verified pre-restore safety snapshots and returned structured failures for
+  snapshot verification, database opening, and restore setup errors.
 
 ## [0.1.1] - 2026-05-13
 

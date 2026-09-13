@@ -167,7 +167,7 @@ function schemaCheckResult(
     message:
       `${label} schema validation failed; the codebase expects Core Data ` +
       "tables, columns and allocator metadata that are not supported. A macOS " +
-      "update changed the schema. Details: " +
+      "update may have changed the schema. Details: " +
       problems.join("; "),
   };
 }
