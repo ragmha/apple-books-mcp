@@ -198,3 +198,90 @@ for (const { label, create, validate, tables } of [
     }
   });
 }
+
+describe("Library insertion allocator metadata", () => {
+  for (const { entity, name, table } of [
+    { entity: 2, name: "BKCollection", table: "ZBKCOLLECTION" },
+    { entity: 3, name: "BKCollectionMember", table: "ZBKCOLLECTIONMEMBER" },
+  ]) {
+    test(`rejects an unexpected entity number for ${name}`, () => {
+      const db = fixture(createSeededDb);
+      db.run("UPDATE Z_PRIMARYKEY SET Z_ENT = 12 WHERE Z_NAME = ?", [name]);
+      const result = validateLibrarySchema(db);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain(name);
+    });
+
+    test(`rejects a missing allocator row for ${name}`, () => {
+      const db = fixture(createSeededDb);
+      db.run("DELETE FROM Z_PRIMARYKEY WHERE Z_ENT = ?", [entity]);
+      expect(validateLibrarySchema(db).ok).toBe(false);
+    });
+
+    test(`rejects a renamed entity at ${entity}`, () => {
+      const db = fixture(createSeededDb);
+      db.run("UPDATE Z_PRIMARYKEY SET Z_NAME = 'Unsupported' WHERE Z_ENT = ?", [
+        entity,
+      ]);
+      expect(validateLibrarySchema(db).ok).toBe(false);
+    });
+
+    test(`rejects an ambiguous entity name for ${name}`, () => {
+      const db = fixture(createSeededDb);
+      db.run(
+        "INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME, Z_MAX) VALUES (12, ?, 0)",
+        [name],
+      );
+      expect(validateLibrarySchema(db).ok).toBe(false);
+    });
+
+    for (const value of [
+      null,
+      -1,
+      1.5,
+      "not-an-integer",
+      Number.MAX_SAFE_INTEGER,
+      1e20,
+    ]) {
+      test(`rejects unusable Z_MAX ${value} for ${name}`, () => {
+        const db = fixture(createSeededDb);
+        db.run("UPDATE Z_PRIMARYKEY SET Z_MAX = ? WHERE Z_ENT = ?", [
+          value,
+          entity,
+        ]);
+        const result = validateLibrarySchema(db);
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.message).toContain("Z_MAX");
+      });
+    }
+
+    test(`rejects a ${name} allocator behind existing primary keys`, () => {
+      const db = fixture(createSeededDb);
+      db.run(`INSERT INTO ${table} (Z_PK, Z_ENT, Z_OPT) VALUES (8, ?, 1)`, [
+        entity,
+      ]);
+      expect(validateLibrarySchema(db).ok).toBe(false);
+
+      db.run("UPDATE Z_PRIMARYKEY SET Z_MAX = 8 WHERE Z_ENT = ?", [entity]);
+      expect(validateLibrarySchema(db)).toEqual({ ok: true });
+    });
+  }
+
+  test("rejects swapped Collection and Collection Member entity names", () => {
+    const db = fixture(createSeededDb);
+    db.run(`
+            UPDATE Z_PRIMARYKEY SET Z_NAME = CASE Z_ENT
+              WHEN 2 THEN 'BKCollectionMember'
+              WHEN 3 THEN 'BKCollection'
+              ELSE Z_NAME END
+          `);
+    expect(validateLibrarySchema(db).ok).toBe(false);
+  });
+
+  test("accepts complete metadata and SQL NULL presentation properties", () => {
+    const db = fixture(createSeededDb);
+    seedCollection(db, { pk: 8, uuid: "fixture-shelf", title: "Shelf" });
+    db.run("UPDATE ZBKCOLLECTION SET ZTITLE = NULL, ZDETAILS = NULL");
+    expect(validateLibrarySchema(db)).toEqual({ ok: true });
+  });
+});
