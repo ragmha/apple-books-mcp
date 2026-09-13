@@ -1,12 +1,8 @@
 import { Database } from "bun:sqlite";
-import { EntityTypes, Tables } from "../../src/db/constants.ts";
+import { Tables } from "../../src/db/constants.ts";
 
 /**
- * Build a fresh in-memory SQLite seeded with the minimum Apple Books
- * Core Data schema needed for LibraryMutation tests:
- *   - Z_PRIMARYKEY (the allocator) with rows for Collection + CollectionMember
- *   - ZBKCOLLECTION (Collections)
- *   - ZBKCOLLECTIONMEMBER (Collection ↔ Asset join)
+ * Build a complete in-memory Library schema for both reads and mutations.
  */
 export function createSeededDb(): Database {
   const db = new Database(":memory:");
@@ -28,7 +24,27 @@ export function createSeededDb(): Database {
       ZASSETID TEXT,
       ZTITLE TEXT,
       ZAUTHOR TEXT,
-      ZCONTENTTYPE INTEGER
+      ZSORTAUTHOR TEXT,
+      ZSORTTITLE TEXT,
+      ZGENRE TEXT,
+      ZLANGUAGE TEXT,
+      ZPAGECOUNT INTEGER,
+      ZRATING INTEGER,
+      ZISFINISHED INTEGER,
+      ZREADINGPROGRESS REAL,
+      ZPATH TEXT,
+      ZCREATIONDATE REAL,
+      ZMODIFICATIONDATE REAL,
+      ZPURCHASEDATE REAL,
+      ZRELEASEDATE REAL,
+      ZLASTOPENDATE REAL,
+      ZCONTENTTYPE INTEGER,
+      ZFILESIZE INTEGER,
+      ZBOOKDESCRIPTION TEXT,
+      ZEPUBID TEXT,
+      ZCOVERURL TEXT,
+      ZDURATION REAL,
+      ZYEAR TEXT
     )
   `);
 
@@ -40,10 +56,12 @@ export function createSeededDb(): Database {
       ZDELETEDFLAG INTEGER,
       ZHIDDEN INTEGER,
       ZSORTKEY REAL,
+      ZSORTMODE INTEGER,
       ZLASTMODIFICATION REAL,
       ZLOCALMODDATE REAL,
       ZCOLLECTIONID TEXT,
-      ZTITLE TEXT
+      ZTITLE TEXT,
+      ZDETAILS TEXT
     )
   `);
 
@@ -60,15 +78,13 @@ export function createSeededDb(): Database {
     )
   `);
 
-  // Seed Z_PRIMARYKEY rows so getNextPrimaryKey has something to bump.
-  db.run(
-    "INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME, Z_SUPER, Z_MAX) VALUES (?, ?, 0, 0)",
-    [EntityTypes.Collection, "BKCollection"],
-  );
-  db.run(
-    "INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME, Z_SUPER, Z_MAX) VALUES (?, ?, 0, 0)",
-    [EntityTypes.CollectionMember, "BKCollectionMember"],
-  );
+  // Keep fixture assignments independent of the production entity constants.
+  db.run(`
+    INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME, Z_SUPER, Z_MAX) VALUES
+      (1, 'BKLibraryAsset', 0, 0),
+      (2, 'BKCollection', 0, 0),
+      (3, 'BKCollectionMember', 0, 0)
+  `);
 
   return db;
 }
@@ -86,6 +102,9 @@ export function seedBook(
      VALUES (?, 1, 1, ?, ?, ?, 1)`,
     [opts.pk, opts.assetId, opts.title, opts.author ?? "Unknown"],
   );
+  db.run("UPDATE Z_PRIMARYKEY SET Z_MAX = MAX(Z_MAX, ?) WHERE Z_ENT = 1", [
+    opts.pk,
+  ]);
 }
 
 /** Convenience: insert a Collection row directly. */
@@ -99,13 +118,14 @@ export function seedCollection(
      VALUES (?, 2, 1, 0, 0, ?, 0, 0, ?, ?)`,
     [opts.pk, opts.pk, opts.uuid, opts.title],
   );
+  db.run("UPDATE Z_PRIMARYKEY SET Z_MAX = MAX(Z_MAX, ?) WHERE Z_ENT = 2", [
+    opts.pk,
+  ]);
 }
 
 /**
  * Build a fresh in-memory SQLite seeded with the Apple Books AEAnnotation
- * schema needed for annotation-mutation tests. The annotation DB is a
- * separate Core Data store from the Library DB; we only need the
- * `ZAEANNOTATION` table for our updates.
+ * schema for reads and mutations. This is a separate Core Data store.
  */
 export function createSeededAnnotationDb(): Database {
   const db = new Database(":memory:");
@@ -135,6 +155,10 @@ export function createSeededAnnotationDb(): Database {
       ZANNOTATIONDELETED INTEGER,
       ZANNOTATIONISUNDERLINE INTEGER
     )
+  `);
+  db.run(`
+    INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME, Z_SUPER, Z_MAX)
+    VALUES (1, 'AEAnnotation', 0, 0)
   `);
   return db;
 }
@@ -169,4 +193,7 @@ export function seedAnnotation(
       opts.deleted ? 1 : 0,
     ],
   );
+  db.run("UPDATE Z_PRIMARYKEY SET Z_MAX = MAX(Z_MAX, ?) WHERE Z_ENT = 1", [
+    opts.pk,
+  ]);
 }
