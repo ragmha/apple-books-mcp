@@ -36,7 +36,9 @@ sync failure.
   incremented on every UPDATE** or Core Data may reject the change or
   trigger merge conflicts on iCloud sync.
 - **`Z_PRIMARYKEY`** — Core Data's PK-allocator table. To insert a row,
-  bump `Z_MAX` for that entity and use the new value as `Z_PK`.
+  bump `Z_MAX` for that entity and use the new value as `Z_PK`. Schema
+  validation checks the expected collection/member entity mappings and
+  rejects missing, ambiguous, exhausted, or lagging allocators.
 - **Core Data epoch** — 2001-01-01 00:00:00 UTC. All `ZLOCALMODDATE` /
   `ZLASTMODIFICATION` / `ZANNOTATION*DATE` fields are seconds since this
   epoch (offset `978307200` from Unix epoch).
@@ -46,7 +48,12 @@ sync failure.
 - **Apple Books identifier** — a string accepted at the tool boundary that is
   *either* the natural key (UUID for Collections / Annotations, `ZASSETID`
   for Assets) *or* the internal `Z_PK` rendered as decimal. Resolution to
-  the internal `Z_PK` is one well-defined operation per entity.
+  the internal `Z_PK` is one well-defined operation per entity. Look up the
+  natural key first; only a missing natural key permits positive, whole-decimal,
+  safe-integer PK fallback (leading zeros are allowed). Canonical UUIDs are
+  compared case-insensitively for Collections / Annotations; Asset IDs stay
+  case-sensitive. Resolve identity before checking deletion state, so a
+  deleted natural key cannot redirect an operation to another row's PK.
 
 ## Architecture (this codebase)
 
@@ -58,7 +65,7 @@ sync failure.
                                            │ JSON-RPC
                           ┌────────────────▼────────────────┐
                           │  src/server.ts                  │
-                          │  MCP tool handlers (15 tools)   │
+                          │  MCP tool handlers (24 tools)   │
                           └────────┬───────────────┬────────┘
                                    │ READ          │ WRITE
                                    ▼               ▼
@@ -106,7 +113,7 @@ sync failure.
         │  read-only   │    │  filesystem-        │ │  FakeLibraryStore       │
         │  Database    │    │    LibraryStore     │ │   (in-memory SQLite,    │
         │  handles     │    │   (real .sqlite,    │ │    seeded fixture)      │
-        │              │    │    WAL checkpoint,  │ │                         │
+        │              │    │    SQLite snapshot, │ │                         │
         │              │    │    integrity-check, │ │  FakeBooksAppPort       │
         │              │    │    rotation)        │ │   (no-op, records       │
         │              │    │                     │ │    call order)          │
@@ -134,19 +141,21 @@ the read-only domain helpers to the real `.sqlite` files via
 entire safety ceremony behind a one-method seam. The two **ports** at the
 bottom of the right rail (Library Store, Books App Control) are where
 production and test diverge — production opens the real Apple Books files
-and shells out to `osascript`; tests substitute in-memory adapters that
-record call order so behaviour can be asserted end-to-end without touching
-`~/Library/Containers/...` or the real Books.app.
+and shells out to `osascript`; tests substitute fake application control and
+use both in-memory adapters and the real filesystem store over disposable
+SQLite fixtures. This covers byte-level snapshot/restore behavior as well as
+call ordering without touching `~/Library/Containers/...` or the real Books.app.
 
 ## Architecture (this codebase) — terms
 
 - **Library Mutation** — the deepened module that owns every write to the
   Library. Three entry points: `mutate(fn)` for transactional changes,
   `listBackups()` to enumerate previous snapshots, and `restore(handle)`
-  to roll the Library back to one. All three share the same safety
-  ceremony behind the seam: snapshot the Library, verify the snapshot,
-  ensure Books.app is not running, do the work, relaunch Books.app, return
-  a structured result. The only place the safety ceremony lives.
+  to roll the Library back to one. Mutations and restores own their safety
+  ceremony behind the seam: verified snapshots, stopped Books.app, guarded
+  database work, and a structured result. Books is relaunched only after a
+  successful commit or verified restore. Listing backups is read-only. The two
+  production stores coordinate the shared Books.app lifecycle.
 - **Library Tx** — the handle the caller receives inside a `mutate` callback.
   Exposes Core Data row helpers (`insert`, `update`, `softDelete`) that bake
   in `Z_PK` / `Z_ENT` / `Z_OPT` / mtime discipline, plus `query` / `run`
@@ -156,10 +165,16 @@ record call order so behaviour can be asserted end-to-end without touching
   The mutation surfaces its message verbatim; system errors return a
   sanitised "Operation failed" with the backup path.
 - **Library Store** — the seam over the Library's filesystem and lifecycle:
-  locate the `.sqlite` file, snapshot it (WAL checkpoint + copy + rotation),
-  verify a snapshot's integrity, list snapshots, restore from one, hand out
-  read-only and writable handles. Production adapter: real
-  `~/Library/Containers/...`. Test adapter: in-memory SQLite + temp dir.
+  locate the `.sqlite` file, create and validate a standalone SQLite snapshot,
+  publish it without collisions, rotate unprotected backups, and hand out
+  database handles. Library and Annotations use a shared injectable filesystem
+  implementation so its behavior is exercised on temporary databases.
+- **Restore Lease** — the exclusive SQLite connection held across a restore's
+  safety snapshot, restoration, verification, and recovery. Cached handles are
+  closed before acquiring it. The macOS `sqlite3` utility performs restoration
+  through SQLite rather than a live-file swap; competing database users cause
+  safe refusal, not forced WAL/shared-memory deletion. The selected backup and
+  verified safety snapshot remain protected until recovery no longer needs them.
 - **Books App Control** — the seam over the macOS Books application:
   `isRunning`, `quit`, `launch`. Production adapter: `osascript` /
   `pgrep` / `open -a Books`. Test adapter: no-op.

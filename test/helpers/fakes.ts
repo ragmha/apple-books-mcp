@@ -21,6 +21,9 @@ type Call = string;
  */
 export class FakeLibraryStore implements LibraryStore {
   verifyResult = true;
+  verifyError: Error | null = null;
+  openWritableError: Error | null = null;
+  verifyResults = new Map<string, boolean>();
   /** When set, snapshot() throws this error instead of recording a snapshot. */
   snapshotError: Error | null = null;
   /** When set, restoreFromBackup() throws this error instead of swapping. */
@@ -38,6 +41,7 @@ export class FakeLibraryStore implements LibraryStore {
   }
 
   openWritable(): Database {
+    if (this.openWritableError) throw this.openWritableError;
     return this.db;
   }
 
@@ -50,7 +54,8 @@ export class FakeLibraryStore implements LibraryStore {
 
   verifySnapshot(handle: string): boolean {
     this.calls.push(`verify:${handle}`);
-    return this.verifyResult;
+    if (this.verifyError) throw this.verifyError;
+    return this.verifyResults.get(handle) ?? this.verifyResult;
   }
 
   listBackups(): BackupInfo[] {

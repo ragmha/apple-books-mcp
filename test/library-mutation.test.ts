@@ -188,6 +188,26 @@ describe("LibraryMutation.mutate", () => {
  * never undo a committed change.
  */
 describe("LibraryMutation system-error paths", () => {
+  for (const phase of ["verification", "writable open"] as const) {
+    test(`${phase} errors resolve to a structured failure before the callback`, async () => {
+      const db = createSeededDb();
+      const store = new FakeLibraryStore(db);
+      const books = new FakeBooksAppPort();
+      const error = new Error("injected setup failure");
+      if (phase === "verification") store.verifyError = error;
+      else store.openWritableError = error;
+      let callbackInvoked = false;
+      const result = await createLibraryMutation(store, books).mutate(() => {
+        callbackInvoked = true;
+      });
+      expect(result.success).toBe(false);
+      expect(result.backupPath).toBe("fake-snapshot-1");
+      expect(callbackInvoked).toBe(false);
+      expect(books.calls).not.toContain("launch");
+      db.close();
+    });
+  }
+
   test("launch failure AFTER a successful COMMIT still reports success and persists the change", async () => {
     const db = createSeededDb();
     const store = new FakeLibraryStore(db);

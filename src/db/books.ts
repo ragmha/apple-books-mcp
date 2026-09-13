@@ -1,5 +1,8 @@
+import type { Database } from "bun:sqlite";
 import { getLibraryDb } from "./connection.ts";
 import { Tables } from "./constants.ts";
+import { resolveIdentifier } from "./identifiers.ts";
+import { resolvePagination } from "./pagination.ts";
 import { createDb } from "./query.ts";
 import {
   type Book,
@@ -8,84 +11,82 @@ import {
   BookSummarySchema,
 } from "./schemas.ts";
 
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 100;
+const BOOKS_FILTER = "ZCONTENTTYPE IS NOT NULL";
 
-export function listBooks(
-  limit?: number,
-  offset?: number,
-): { books: BookSummary[]; total: number; limit: number; offset: number } {
-  const libDb = getLibraryDb();
-  const db = createDb(libDb);
+export function createBookQueries(getDatabase: () => Database) {
+  function listBooks(
+    limit?: number,
+    offset?: number,
+  ): { books: BookSummary[]; total: number; limit: number; offset: number } {
+    const pagination = resolvePagination(limit, offset);
+    const libDb = getDatabase();
+    const db = createDb(libDb);
 
-  const effectiveLimit = Math.min(limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-  const effectiveOffset = offset ?? 0;
+    const total = libDb
+      .query<{ count: number }, []>(
+        `SELECT COUNT(*) as count FROM ${Tables.Books} WHERE ${BOOKS_FILTER}`,
+      )
+      .get();
+    if (!total) throw new Error("Failed to count books");
 
-  const total = libDb
-    .query(
-      `SELECT COUNT(*) as count FROM ${Tables.Books} WHERE ZCONTENTTYPE IS NOT NULL`,
-    )
-    .get() as { count: number };
+    const books = db
+      .selectFrom(Tables.Books, BookSummarySchema)
+      .selectAll()
+      .whereRaw(BOOKS_FILTER)
+      .orderBy("ZSORTTITLE")
+      .orderBy("Z_PK")
+      .limit(pagination.limit)
+      .offset(pagination.offset)
+      .execute();
 
-  const books = db
-    .selectFrom(Tables.Books, BookSummarySchema)
-    .selectAll()
-    .whereNotNull("ZCONTENTTYPE")
-    .orderBy("ZSORTTITLE")
-    .limit(effectiveLimit)
-    .offset(effectiveOffset)
-    .execute();
+    return {
+      books,
+      total: total.count,
+      ...pagination,
+    };
+  }
 
-  return {
-    books,
-    total: total.count,
-    limit: effectiveLimit,
-    offset: effectiveOffset,
-  };
-}
+  function listAllBooks(): Book[] {
+    const db = createDb(getDatabase());
+    return db
+      .selectFrom(Tables.Books, BookSchema)
+      .selectAll()
+      .whereRaw(BOOKS_FILTER)
+      .orderBy("ZSORTTITLE")
+      .orderBy("Z_PK")
+      .execute();
+  }
 
-export function listAllBooks(): Book[] {
-  const db = createDb(getLibraryDb());
-  return db
-    .selectFrom(Tables.Books, BookSchema)
-    .selectAll()
-    .whereNotNull("ZCONTENTTYPE")
-    .orderBy("ZSORTTITLE")
-    .execute();
-}
+  function getBookById(bookId: string): Book | null {
+    const db = createDb(getDatabase());
 
-export function getBookById(bookId: string): Book | null {
-  const db = createDb(getLibraryDb());
-
-  // Try by ZASSETID first
-  let book = db
-    .selectFrom(Tables.Books, BookSchema)
-    .selectAll()
-    .where("ZASSETID", "=", bookId)
-    .get();
-
-  if (!book) {
-    const numId = parseInt(bookId, 10);
-    if (!Number.isNaN(numId)) {
-      book = db
+    return resolveIdentifier(bookId, "ZASSETID", (predicate, params) =>
+      db
         .selectFrom(Tables.Books, BookSchema)
         .selectAll()
-        .where("Z_PK", "=", numId)
-        .get();
-    }
+        .whereRaw(predicate, params)
+        .get(),
+    );
   }
-  return book;
+
+  function searchBooks(query: string, limit?: number, offset?: number): Book[] {
+    const pagination = resolvePagination(limit, offset);
+    const db = createDb(getDatabase());
+    return db
+      .selectFrom(Tables.Books, BookSchema)
+      .selectAll()
+      .whereLike("ZTITLE", query)
+      .orWhereLike("ZAUTHOR", query)
+      .orWhereLike("ZGENRE", query)
+      .orderBy("ZSORTTITLE")
+      .orderBy("Z_PK")
+      .limit(pagination.limit)
+      .offset(pagination.offset)
+      .execute();
+  }
+
+  return { listBooks, listAllBooks, getBookById, searchBooks };
 }
 
-export function searchBooks(query: string): Book[] {
-  const db = createDb(getLibraryDb());
-  return db
-    .selectFrom(Tables.Books, BookSchema)
-    .selectAll()
-    .whereLike("ZTITLE", query)
-    .orWhereLike("ZAUTHOR", query)
-    .orWhereLike("ZGENRE", query)
-    .orderBy("ZSORTTITLE")
-    .limit(MAX_LIMIT)
-    .execute();
-}
+export const { listBooks, listAllBooks, getBookById, searchBooks } =
+  createBookQueries(getLibraryDb);
