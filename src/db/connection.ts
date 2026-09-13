@@ -24,39 +24,68 @@ function findSqliteFile(dir: string, prefix: string): string {
   return join(dir, file);
 }
 
-let libraryDb: Database | null = null;
-let libraryDbReadonly: boolean | null = null;
-let annotationDb: Database | null = null;
-let annotationDbReadonly: boolean | null = null;
+export function openDatabase(path: string, readonly: boolean): Database {
+  return new Database(path, { readonly, readwrite: !readonly, create: false });
+}
+
+export function createDatabaseConnection(
+  getDbPath: () => string,
+  open = openDatabase,
+) {
+  let cached: { db: Database; readonly: boolean } | undefined;
+
+  function close(): void {
+    const previous = cached;
+    cached = undefined;
+    previous?.db.close();
+  }
+
+  return {
+    get(readonly = true): Database {
+      if (cached?.readonly === readonly) return cached.db;
+      close();
+      const db = open(getDbPath(), readonly);
+      try {
+        if (!readonly) {
+          const row = db
+            .query<{ journal_mode: string }, []>("PRAGMA journal_mode=WAL")
+            .get();
+          if (row?.journal_mode !== "wal") {
+            throw new Error("Could not enable SQLite WAL mode.");
+          }
+        }
+        cached = { db, readonly };
+        return db;
+      } catch (error) {
+        try {
+          db.close();
+        } catch (closeError) {
+          console.error("SQLite connection setup cleanup failed:", closeError);
+        }
+        throw error;
+      }
+    },
+    close,
+  };
+}
+
+const libraryConnection = createDatabaseConnection(getLibraryDbPath);
+const annotationConnection = createDatabaseConnection(getAnnotationDbPath);
 
 export function getLibraryDb(readonly = true): Database {
-  if (libraryDb && libraryDbReadonly === readonly) return libraryDb;
-  if (libraryDb) {
-    libraryDb.close();
-    libraryDb = null;
-  }
-  const dbPath = findSqliteFile(Paths.libraryDir, DbPrefixes.library);
-  libraryDb = new Database(dbPath, { readonly });
-  libraryDbReadonly = readonly;
-  if (!readonly) {
-    libraryDb.run("PRAGMA journal_mode=WAL");
-  }
-  return libraryDb;
+  return libraryConnection.get(readonly);
 }
 
 export function getAnnotationDb(readonly = true): Database {
-  if (annotationDb && annotationDbReadonly === readonly) return annotationDb;
-  if (annotationDb) {
-    annotationDb.close();
-    annotationDb = null;
-  }
-  const dbPath = findSqliteFile(Paths.annotationDir, DbPrefixes.annotation);
-  annotationDb = new Database(dbPath, { readonly });
-  annotationDbReadonly = readonly;
-  if (!readonly) {
-    annotationDb.run("PRAGMA journal_mode=WAL");
-  }
-  return annotationDb;
+  return annotationConnection.get(readonly);
+}
+
+export function closeLibraryDb(): void {
+  libraryConnection.close();
+}
+
+export function closeAnnotationDb(): void {
+  annotationConnection.close();
 }
 
 /** Reopen library DB with write access for mutation operations */
@@ -70,16 +99,15 @@ export function getWritableAnnotationDb(): Database {
 }
 
 export function closeAll(): void {
-  if (libraryDb) {
-    libraryDb.close();
-    libraryDb = null;
-    libraryDbReadonly = null;
+  const errors: unknown[] = [];
+  for (const connection of [libraryConnection, annotationConnection]) {
+    try {
+      connection.close();
+    } catch (error) {
+      errors.push(error);
+    }
   }
-  if (annotationDb) {
-    annotationDb.close();
-    annotationDb = null;
-    annotationDbReadonly = null;
-  }
+  if (errors.length) throw new AggregateError(errors, "SQLite cleanup failed.");
 }
 
 /** Get the path to the BKLibrary SQLite file (for backup purposes) */
