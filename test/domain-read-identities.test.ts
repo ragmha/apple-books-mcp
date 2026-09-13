@@ -44,6 +44,29 @@ function fixture(naturalId = "natural") {
 
 describe("domain read identity resolution", () => {
   test.each([
+    "14\n",
+    "14\r",
+    "14\r\n",
+  ])("does not accept a line-terminated decimal identifier as a PK: %j", (id) => {
+    const queries = fixture();
+    expect(queries.getBookById(id)).toBeNull();
+    expect(queries.getCollectionById(id)).toBeNull();
+    expect(queries.getCollectionBooks(id)).toEqual([]);
+    expect(queries.getAnnotationById(id)).toBeNull();
+  });
+
+  test("does not fold a UUID-like natural key with a trailing newline", () => {
+    const naturalId = "14F00000-0000-4000-8000-000000000099\n";
+    const queries = fixture(naturalId);
+    expect(queries.getBookById(naturalId)?.id).toBe(99);
+    expect(queries.getCollectionById(naturalId)?.id).toBe(99);
+    expect(queries.getAnnotationById(naturalId)?.id).toBe(99);
+    expect(queries.getCollectionById(naturalId.toLowerCase())).toBeNull();
+    expect(queries.getCollectionBooks(naturalId.toLowerCase())).toEqual([]);
+    expect(queries.getAnnotationById(naturalId.toLowerCase())).toBeNull();
+  });
+
+  test.each([
     "14suffix",
     "14.0",
     "14e0",

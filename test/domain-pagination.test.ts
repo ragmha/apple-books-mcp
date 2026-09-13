@@ -257,3 +257,63 @@ describe("existing page and full-read contracts", () => {
     }
   });
 });
+
+describe("paginated searches preserve literal LIKE escapes and field coverage", () => {
+  test.each([
+    "%",
+    "_",
+    "\\",
+  ])("matches literal %s across book metadata and annotation text fields", (character) => {
+    const lib = createSeededDb();
+    const ann = createSeededAnnotationDb();
+    databases.push(lib, ann);
+    const needle = `literal${character}suffix`;
+    for (const pk of [1, 2, 3]) {
+      seedBook(lib, {
+        pk,
+        assetId: `book-${pk}`,
+        title: pk === 1 ? needle : "Ordinary",
+        author: pk === 2 ? needle : "Ordinary",
+      });
+      seedAnnotation(ann, {
+        pk,
+        uuid: `annotation-${pk}`,
+        assetId: "book-1",
+        selectedText: pk === 1 ? needle : "",
+        note: pk === 2 ? needle : "",
+      });
+    }
+    lib.run(`UPDATE ${Tables.Books} SET ZGENRE = ? WHERE Z_PK = 3`, [needle]);
+    ann.run(
+      `UPDATE ${Tables.Annotations} SET ZANNOTATIONREPRESENTATIVETEXT = ? WHERE Z_PK = 3`,
+      [needle],
+    );
+    seedBook(lib, { pk: 4, assetId: "decoy", title: "literalXsuffix" });
+    seedAnnotation(ann, {
+      pk: 4,
+      uuid: "decoy",
+      assetId: "book-1",
+      selectedText: "literalXsuffix",
+      note: "literalXsuffix",
+    });
+    seedAnnotation(ann, {
+      pk: 5,
+      uuid: "deleted",
+      assetId: "book-1",
+      selectedText: needle,
+      note: needle,
+      deleted: true,
+    });
+    const books = createBookQueries(() => lib);
+    const annotations = createAnnotationQueries(() => ann);
+
+    expect(identities(books.searchBooks(needle))).toEqual([1, 2, 3]);
+    expect(identities(books.searchBooks(needle, 1, 1))).toEqual([2]);
+    expect(identities(annotations.searchHighlightedText(needle))).toEqual([1]);
+    expect(annotations.searchHighlightedText(needle, 1, 1)).toEqual([]);
+    expect(identities(annotations.searchNotes(needle))).toEqual([2]);
+    expect(annotations.searchNotes(needle, 1, 1)).toEqual([]);
+    expect(identities(annotations.fullTextSearch(needle))).toEqual([3, 2, 1]);
+    expect(identities(annotations.fullTextSearch(needle, 1, 1))).toEqual([2]);
+  });
+});
