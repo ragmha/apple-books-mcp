@@ -13,6 +13,15 @@ import { createSeededDb, seedBook, seedCollection } from "./helpers/seed.ts";
 let db: Database;
 afterEach(() => db.close());
 
+const naturalIds = [
+  "14",
+  "0014",
+  "0",
+  "-14",
+  "9007199254740993",
+  "14' or 1=1 --",
+];
+
 function fixture(naturalId: string) {
   db = createSeededDb();
   for (const [pk, id] of [
@@ -29,10 +38,9 @@ function fixture(naturalId: string) {
 }
 
 describe("collection mutation identity precedence", () => {
-  test.each([
-    "14",
-    "0014",
-  ])("add prefers exact natural key %s over either entity's PK", async (id) => {
+  test.each(
+    naturalIds,
+  )("add prefers exact natural key %s over either entity's PK", async (id) => {
     const mutation = fixture(id);
     const result = await mutation.mutate((tx) =>
       addBookToCollectionTx(tx, id, id),
@@ -51,10 +59,9 @@ describe("collection mutation identity precedence", () => {
     ).toEqual([{ ZASSET: 99, ZCOLLECTION: 99, ZASSETID: id }]);
   });
 
-  test.each([
-    "14",
-    "0014",
-  ])("remove prefers exact natural key %s and preserves the other membership", async (id) => {
+  test.each(
+    naturalIds,
+  )("remove prefers exact natural key %s and preserves the other membership", async (id) => {
     const mutation = fixture(id);
     for (const pk of [14, 99]) {
       db.run(
@@ -81,8 +88,7 @@ describe("collection mutation identity precedence", () => {
   });
 
   test.each([
-    "14",
-    "0014",
+    ...naturalIds,
     "14F00000-0000-4000-8000-000000000099",
   ])("delete resolves %s without touching a numeric-prefix collision", async (id) => {
     const mutation = fixture(id);
