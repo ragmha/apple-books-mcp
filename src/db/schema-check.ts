@@ -1,5 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { Tables } from "./constants.ts";
+import {
+  AnnotationRowSchema,
+  BookRowSchema,
+  CollectionRowSchema,
+} from "./schemas.ts";
 
 /**
  * Result of a schema-validation pass against the writable Library DB.
@@ -16,35 +21,39 @@ export type SchemaCheckResult = { ok: true } | { ok: false; message: string };
 const REQUIRED: Array<{ table: string; columns: string[] }> = [
   {
     table: Tables.Books,
-    columns: ["Z_PK", "Z_ENT", "Z_OPT", "ZASSETID", "ZTITLE"],
+    columns: [...Object.keys(BookRowSchema.shape), "Z_ENT", "Z_OPT"],
   },
   {
     table: Tables.Collections,
     columns: [
+      ...Object.keys(CollectionRowSchema.shape),
+      "Z_ENT",
+      "Z_OPT",
+      "ZLOCALMODDATE",
+    ],
+  },
+  {
+    table: Tables.CollectionMembers,
+    columns: [
       "Z_PK",
       "Z_ENT",
       "Z_OPT",
-      "ZTITLE",
-      "ZCOLLECTIONID",
-      "ZDELETEDFLAG",
+      "ZSORTKEY",
+      "ZASSET",
+      "ZCOLLECTION",
+      "ZASSETID",
+      "ZLOCALMODDATE",
     ],
   },
-  { table: "Z_PRIMARYKEY", columns: ["Z_ENT", "Z_NAME", "Z_MAX"] },
+  { table: Tables.PrimaryKey, columns: ["Z_ENT", "Z_NAME", "Z_MAX"] },
 ];
 
 const REQUIRED_ANNOTATIONS: Array<{ table: string; columns: string[] }> = [
   {
     table: Tables.Annotations,
-    columns: [
-      "Z_PK",
-      "Z_OPT",
-      "ZANNOTATIONUUID",
-      "ZANNOTATIONASSETID",
-      "ZANNOTATIONNOTE",
-      "ZANNOTATIONDELETED",
-      "ZANNOTATIONMODIFICATIONDATE",
-    ],
+    columns: [...Object.keys(AnnotationRowSchema.shape), "Z_ENT", "Z_OPT"],
   },
+  { table: Tables.PrimaryKey, columns: ["Z_ENT", "Z_NAME", "Z_MAX"] },
 ];
 
 export function validateLibrarySchema(db: Database): SchemaCheckResult {
