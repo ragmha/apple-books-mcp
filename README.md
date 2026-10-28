@@ -16,6 +16,54 @@ and write your local Apple Books library, collections, and annotations.
 > schema at startup and refuses to run if it doesn't recognise it; even so,
 > use at your own risk.
 
+## Purpose and workflow
+
+For readers who keep research notes in Apple Books, this server exposes local
+library search, highlight retrieval, Markdown export, and collection/note
+maintenance as MCP tools. A useful discovery question is: **Do you need only
+to find and export notes, or also to change the library?** Start with reads;
+live writes restart Books.app and affect your personal data.
+
+The implemented workflow is `list_books` → `search_highlighted_text` →
+`export_annotations_markdown` for a selected asset. This is a local integration,
+not a cloud migration, hosted service, or customer deployment. It contains no
+model calls or API keys: an external MCP client chooses tools and may send
+their results to its own model provider.
+
+## Quickstart: synthetic POC (no Apple Books access)
+
+From a clone, with [Bun](https://bun.sh) installed:
+
+```bash
+bun install --frozen-lockfile
+bun test test/mcp-protocol.test.ts --test-name-pattern "Synthetic POC"
+```
+
+These three executable cases use the real MCP client/server over an in-memory
+transport, production read queries, and invented SQLite records. They exercise
+list → search → scoped export, unsupported-tool rejection, and an injected
+permission failure. No sign-in, model, Full Disk Access, or Books.app is needed.
+See [`demo/README.md`](./demo/README.md#executable-poc) for expected results,
+evidence paths, and what these cases do **not** prove.
+
+| Mode | What runs | Boundary |
+|---|---|---|
+| Synthetic POC | Protocol tests and in-memory SQLite | No real library; writes are fake handlers |
+| Scripted video | Remotion scenes in `demo/script.ts` | Illustration, not a recording of executed tools |
+| Live MCP server | `src/index.ts`, stdio, local Apple Books databases | macOS, permissions, and a compatible schema required; writes enabled |
+
+## Repository map
+
+| Path | Responsibility |
+|---|---|
+| [`src/index.ts`](./src/index.ts), [`src/server.ts`](./src/server.ts) | Startup schema checks, stdio transport, tool registration |
+| [`src/mcp-tool.ts`](./src/mcp-tool.ts) | JSON results and error translation |
+| [`src/db/`](./src/db/) | Validated queries, schema transformations, mutations and backups |
+| [`test/`](./test/) | Synthetic protocol, query, mutation and filesystem regressions |
+| [`demo/`](./demo/) | Scripted presentation and executable POC instructions |
+| [`CONTEXT.md`](./CONTEXT.md) | Architecture and production/test adapter boundaries |
+| [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) | Existing macOS check, typecheck and test job |
+
 ## Requirements
 
 - **macOS** (the only platform that has Apple Books)
@@ -47,11 +95,14 @@ You'll know it worked when this server starts without printing
 ## Install
 
 ```bash
-bun add -g @ragmha/apple-books-mcp        # if/when published to npm
-# or run directly from a clone:
 git clone https://github.com/ragmha/apple-books-mcp.git
-cd apple-books-mcp && bun install
+cd apple-books-mcp
+bun install --frozen-lockfile
 ```
+
+Use a local clone for a repeatable setup. The package-based `bunx` examples
+below require an available npm release; release availability is not verified
+by the synthetic POC.
 
 The `bin` entry points at the TypeScript source — Bun executes `.ts` files
 directly, so no build step is needed. **Node and `npx` will not work**;
@@ -110,7 +161,7 @@ copilot mcp add apple-books bunx @ragmha/apple-books-mcp
 
 ## Demo
 
-The repository includes a scripted Remotion demo that uses sanitized sample
+The repository includes a scripted Remotion demo that uses synthetic sample
 books, highlights, and notes. It shows the read flow (`list_books`,
 `search_highlighted_text`, `export_annotations_markdown`) and the write flow
 (`create_collection`, collection membership changes, annotation updates/deletes,
@@ -249,10 +300,11 @@ a plain copy of a database with outstanding WAL data is not sufficient.
 
 ## Troubleshooting
 
-**Schema validation failed** — this server has been tested
-against macOS 14/15 Apple Books schemas. If you're on a newer macOS that
-has changed the schema, please open an issue with your `sw_vers` output and
-the error detail. Validation covers fields required by reads and writes,
+**Schema validation failed** — CI targets `macos-latest` with synthetic fixtures,
+not a live Apple Books compatibility matrix. For an incompatible schema,
+please open an issue with your macOS / Books versions and a reviewed,
+redacted error summary. Do not attach library databases or personal notes.
+Validation covers fields required by reads and writes,
 including the collection-membership table and Core Data entity/allocator
 metadata. Do not bypass a failed check or change the metadata to make it pass.
 
@@ -297,6 +349,27 @@ the port adapters.
 
 Pull requests welcome. Please read [`CONTRIBUTING.md`](./CONTRIBUTING.md)
 for the dev loop, commit style, and how the test fixtures work.
+
+## Support and limitations
+
+Use [repository issues](https://github.com/ragmha/apple-books-mcp/issues)
+for non-sensitive bugs and feature requests; the maintainer contact is
+[`@ragmha`](https://github.com/ragmha). Include the commit, Bun version,
+OS version, command, and a minimal synthetic reproduction. Do not include
+database files, real highlights, credentials, or unreviewed stderr logs.
+For vulnerabilities, use the private route in `SECURITY.md`.
+
+The POC is not evidence of live macOS permissions, Books.app control, iCloud
+sync, model tool-selection quality, or recovery on your library. The server
+does not implement per-tool authorization or a read-only deployment mode:
+connecting it exposes writes as well as reads. Configure approval in your MCP
+client and review its data-sharing policy before connecting a real library.
+Backups do not make unsupported database writes risk-free.
+
+For a handoff, record your commit, runtime and macOS / Books versions, required
+permissions, backup/recovery procedure, and which live checks you actually
+performed. No service-level support commitment or customer outcome is
+established by these fixtures.
 
 ## Security
 
