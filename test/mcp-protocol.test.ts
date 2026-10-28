@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -165,6 +165,93 @@ async function payload(
 }
 
 const entityArray = z.array(z.object({ id: z.number() }));
+
+describe("Synthetic POC", () => {
+  test("lists books, finds a highlight, and exports only the selected book", async () => {
+    const { handlers, annotations } = seededHandlers(1);
+    seedAnnotation(annotations, {
+      pk: 2,
+      uuid: "annotation-2",
+      assetId: "other-book",
+      selectedText: "Unrelated synthetic highlight",
+    });
+    const { client } = await connect(undefined, handlers);
+
+    expect(await payload(client, "list_books", { limit: 1 })).toMatchObject({
+      books: [{ assetId: "book-1", title: "Fixture book 1" }],
+      total: 1,
+      limit: 1,
+      offset: 0,
+    });
+    expect(
+      await payload(client, "search_highlighted_text", {
+        text: "Fixture highlight",
+      }),
+    ).toMatchObject([
+      { assetId: "book-1", selectedText: "Fixture highlight 1" },
+    ]);
+    const exported = z
+      .object({ assetId: z.string(), markdown: z.string() })
+      .parse(
+        await payload(client, "export_annotations_markdown", {
+          asset_id: "book-1",
+        }),
+      );
+    expect(exported.assetId).toBe("book-1");
+    expect(exported.markdown).toContain("Fixture highlight 1");
+    expect(exported.markdown).toContain("Fixture note 1");
+    expect(exported.markdown).not.toContain("Unrelated synthetic highlight");
+  });
+
+  test("rejects an unsupported tool without dispatching a domain handler", async () => {
+    const handlers = fakeHandlers();
+    let calls = 0;
+    handlers.listBooks = () => {
+      calls += 1;
+      return { books: [], total: 0, limit: 50, offset: 0 };
+    };
+    handlers.createCollection = async () => {
+      calls += 1;
+      return { success: true, message: "Created." };
+    };
+    const { client } = await connect(undefined, handlers);
+    const { tools } = await client.listTools();
+    expect(tools.some((tool) => tool.name === "upload_library")).toBe(false);
+    const result = await client.callTool({
+      name: "upload_library",
+      arguments: {},
+    });
+    expect(result.isError).toBe(true);
+    expect(calls).toBe(0);
+    await payload(client, "list_books");
+    expect(calls).toBe(1);
+  });
+
+  test("surfaces an injected permission failure without retrying or leaking its detail", async () => {
+    const handlers = fakeHandlers();
+    const failure = Object.assign(new Error("EACCES: synthetic-library-path"), {
+      code: "EACCES",
+    });
+    let calls = 0;
+    handlers.listBooks = () => {
+      calls += 1;
+      throw failure;
+    };
+    const { client } = await connect(undefined, handlers);
+    const stderr = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await client.callTool({ name: "list_books" });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("Operation failed.");
+      expect(JSON.stringify(result)).not.toContain("synthetic-library-path");
+      expect(stderr).toHaveBeenCalledWith("MCP tool error:", failure);
+      expect(calls).toBe(1);
+      expect(await payload(client, "list_collections")).toEqual([]);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+});
 
 describe("MCP protocol contracts", () => {
   test("omitted arguments equal an empty object for a zero-argument tool", async () => {

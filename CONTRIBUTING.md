@@ -9,7 +9,7 @@ tested, and explicit about safety behavior.
 
 ```bash
 nvm use
-bun install
+bun install --frozen-lockfile
 bun run check
 bun run typecheck
 bun test
@@ -18,6 +18,11 @@ bun test
 The `.nvmrc` pins the Node/npm publishing toolchain. Tests use in-memory
 SQLite, disposable filesystem databases, and fake Books.app adapters.
 They must not touch your real Apple Books library or control Books.app.
+For a bounded first run, use
+`bun test test/mcp-protocol.test.ts --test-name-pattern "Synthetic POC"`;
+see `demo/README.md` for expected behavior and evaluation limits.
+CI uses `macos-latest` and the latest Bun, not a pinned live Apple Books
+compatibility matrix. Include exact local versions with validation results.
 Storage regressions should exercise the production filesystem adapter against
 temporary fixtures, not a copied implementation or only a call-recording fake.
 
@@ -43,6 +48,10 @@ bun run demo:render
 
 Rendered videos go to `demo/out/`, which is ignored by git and excluded from
 the npm package.
+
+Scripted scenes are illustrations, not observed tool execution. Keep that
+distinction explicit in demo changes. Use invented text and synthetic records,
+not excerpts copied from a personal library.
 
 ## Safety rules
 
